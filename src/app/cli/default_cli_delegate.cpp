@@ -27,8 +27,7 @@
 #include "doc/sprite.h"
 
 #ifdef ENABLE_SCRIPTING
-  #include "app/script/app_scripting.h"
-  #include "script/engine_delegate.h"
+  #include "app/script/engine.h"
 #endif
 
 #include <iostream>
@@ -128,8 +127,9 @@ void DefaultCliDelegate::execScript(const std::string& filename)
 {
 #ifdef ENABLE_SCRIPTING
   script::StdoutEngineDelegate delegate;
-  AppScripting engine(&delegate);
-  engine.evalFile(filename);
+  script::Engine engine(&delegate);
+  if (!engine.evalFile(filename))
+    throw std::runtime_error("Error executing script");
 #endif
 }
 

@@ -13,111 +13,155 @@
 #include "app/commands/params.h"
 #include "app/context.h"
 #include "app/doc.h"
-#include "app/script/app_scripting.h"
-#include "app/script/sprite_wrap.h"
-#include "script/engine.h"
+#include "app/script/engine.h"
+#include "app/script/luacpp.h"
+#include "app/site.h"
+#include "app/site.h"
+#include "app/tx.h"
 
 #include <iostream>
 
 namespace app {
+namespace script {
 
 namespace {
 
-void App_open(script::ContextHandle handle)
+int App_open(lua_State* L)
 {
-  script::Context ctx(handle);
-  const char* filename = ctx.requireString(1);
+  const char* filename = luaL_checkstring(L, 1);
 
-  app::Context* appCtx = App::instance()->context();
-  Doc* oldDoc = appCtx->activeDocument();
+  app::Context* ctx = App::instance()->context();
+  Doc* oldDoc = ctx->activeDocument();
 
   Command* openCommand =
     Commands::instance()->byId(CommandId::OpenFile());
   Params params;
   params.set("filename", filename);
-  appCtx->executeCommand(openCommand, params);
+  ctx->executeCommand(openCommand, params);
 
-  Doc* newDoc = appCtx->activeDocument();
+  Doc* newDoc = ctx->activeDocument();
   if (newDoc != oldDoc)
-    ctx.newObject("Sprite", unwrap_engine(ctx)->wrapSprite(newDoc), nullptr);
+    push_ptr(L, newDoc->sprite());
   else
-    ctx.pushNull();
+    lua_pushnil(L);
+  return 1;
 }
 
-void App_exit(script::ContextHandle handle)
+int App_exit(lua_State* L)
 {
-  script::Context ctx(handle);
-  app::Context* appCtx = App::instance()->context();
-  if (appCtx && appCtx->isUIAvailable()) {
+  app::Context* ctx = App::instance()->context();
+  if (ctx && ctx->isUIAvailable()) {
     Command* exitCommand =
       Commands::instance()->byId(CommandId::Exit());
-    appCtx->executeCommand(exitCommand);
+    ctx->executeCommand(exitCommand);
   }
-  ctx.pushUndefined();
+  return 0;
 }
 
-void App_get_activeSprite(script::ContextHandle handle)
+int App_transaction(lua_State* L)
 {
-  script::Context ctx(handle);
-  app::Context* appCtx = App::instance()->context();
-  Doc* doc = appCtx->activeDocument();
+  int top = lua_gettop(L);
+  int nresults = 0;
+  if (lua_isfunction(L, 1)) {
+    Tx tx; // Create a new transaction so it exists in the whole
+           // duration of the argument function call.
+    lua_pushvalue(L, -1);
+    if (lua_pcall(L, 0, LUA_MULTRET, 0) == LUA_OK)
+      tx.commit();
+    nresults = lua_gettop(L) - top;
+  }
+  return nresults;
+}
+
+int App_undo(lua_State* L)
+{
+  app::Context* ctx = App::instance()->context();
+  if (ctx) {
+    Command* undo = Commands::instance()->byId(CommandId::Undo());
+    ctx->executeCommand(undo);
+  }
+  return 0;
+}
+
+int App_redo(lua_State* L)
+{
+  app::Context* ctx = App::instance()->context();
+  if (ctx) {
+    Command* redo = Commands::instance()->byId(CommandId::Redo());
+    ctx->executeCommand(redo);
+  }
+  return 0;
+}
+
+int App_get_activeSprite(lua_State* L)
+{
+  app::Context* ctx = App::instance()->context();
+  Doc* doc = ctx->activeDocument();
   if (doc)
-    ctx.newObject("Sprite", unwrap_engine(ctx)->wrapSprite(doc), nullptr);
+    push_ptr(L, doc->sprite());
   else
-    ctx.pushNull();
+    lua_pushnil(L);
+  return 1;
 }
 
-void App_get_activeImage(script::ContextHandle handle)
+int App_get_activeImage(lua_State* L)
 {
-  script::Context ctx(handle);
-  app::Context* appCtx = App::instance()->context();
-  Doc* doc = appCtx->activeDocument();
-  if (doc) {
-    SpriteWrap* sprWrap = unwrap_engine(ctx)->wrapSprite(doc);
-    ASSERT(sprWrap);
-
-    ImageWrap* imgWrap = sprWrap->activeImage();
-    if (imgWrap != nullptr) {
-      ctx.newObject("Image", imgWrap, nullptr);
-      return;
-    }
-  }
-  ctx.pushNull();
+  app::Context* ctx = App::instance()->context();
+  Site site = ctx->activeSite();
+  if (site.image())
+    push_ptr(L, site.image());
+  else
+    lua_pushnil(L);
+  return 1;
 }
 
-void App_get_pixelColor(script::ContextHandle handle)
+int App_get_site(lua_State* L)
 {
-  script::Context ctx(handle);
-  ctx.newObject("PixelColor", nullptr, nullptr);
+  app::Context* ctx = App::instance()->context();
+  Site site = ctx->activeSite();
+  push_obj(L, site);
+  return 1;
 }
 
-void App_get_version(script::ContextHandle handle)
+int App_get_version(lua_State* L)
 {
-  script::Context ctx(handle);
-  ctx.pushString(VERSION);
+  lua_pushstring(L, VERSION);
+  return 1;
 }
 
-const script::FunctionEntry App_methods[] = {
-  { "open", App_open, 1 },
-  { "exit", App_exit, 0 },
-  { nullptr, nullptr, 0 }
+const luaL_Reg App_methods[] = {
+  { "open",        App_open },
+  { "exit",        App_exit },
+  { "transaction", App_transaction },
+  { "undo",        App_undo },
+  { "redo",        App_redo },
+  { nullptr,       nullptr }
 };
 
-const script::PropertyEntry App_props[] = {
+const Property App_properties[] = {
   { "activeSprite", App_get_activeSprite, nullptr },
   { "activeImage", App_get_activeImage, nullptr },
-  { "pixelColor", App_get_pixelColor, nullptr },
   { "version", App_get_version, nullptr },
-  { nullptr, nullptr, 0 }
+  { "site", App_get_site, nullptr },
+  { nullptr, nullptr, nullptr }
 };
 
 } // anonymous namespace
 
-void register_app_object(script::Context& ctx)
+DEF_MTNAME(App);
+
+void register_app_object(lua_State* L)
 {
-  ctx.pushGlobalObject();
-  ctx.registerObject(-1, "app", App_methods, App_props);
-  ctx.pop();
+  REG_CLASS(L, App);
+  REG_CLASS_PROPERTIES(L, App);
+
+  lua_newtable(L);              // Create a table which will be the "app" object
+  lua_pushvalue(L, -1);
+  luaL_getmetatable(L, get_mtname<App>());
+  lua_setmetatable(L, -2);
+  lua_setglobal(L, "app");
+  lua_pop(L, 1);                // Pop app table
 }
 
+} // namespace script
 } // namespace app
