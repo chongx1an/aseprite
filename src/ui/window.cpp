@@ -1,4 +1,5 @@
 // Aseprite UI Library
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -23,6 +24,8 @@
 #include "ui/size_hint_event.h"
 #include "ui/system.h"
 #include "ui/theme.h"
+
+#include <algorithm>
 
 namespace ui {
 
@@ -127,7 +130,7 @@ Window::Window(Type type, const std::string& text)
 
 Window::~Window()
 {
-  manager()->_closeWindow(this, false);
+  manager()->_closeWindow(this, isVisible());
 }
 
 void Window::setAutoRemap(bool state)
@@ -345,7 +348,7 @@ bool Window::onProcessMessage(Message* msg)
   switch (msg->type()) {
 
     case kOpenMessage:
-      m_closer = NULL;
+      m_closer = nullptr;
       break;
 
     case kCloseMessage:
@@ -361,7 +364,7 @@ bool Window::onProcessMessage(Message* msg)
 
       if (m_hitTest != HitTestNowhere &&
           m_hitTest != HitTestClient) {
-        if (clickedWindowPos == NULL)
+        if (clickedWindowPos == nullptr)
           clickedWindowPos = new gfx::Rect(bounds());
         else
           *clickedWindowPos = bounds();
@@ -378,9 +381,9 @@ bool Window::onProcessMessage(Message* msg)
         releaseMouse();
         set_mouse_cursor(kArrowCursor);
 
-        if (clickedWindowPos != NULL) {
+        if (clickedWindowPos != nullptr) {
           delete clickedWindowPos;
-          clickedWindowPos = NULL;
+          clickedWindowPos = nullptr;
         }
 
         m_hitTest = HitTestNowhere;
@@ -507,13 +510,13 @@ void Window::onSizeHint(SizeHintEvent& ev)
       if (!child->isDecorative()) {
         reqSize = child->sizeHint();
 
-        maxSize.w = MAX(maxSize.w, reqSize.w);
-        maxSize.h = MAX(maxSize.h, reqSize.h);
+        maxSize.w = std::max(maxSize.w, reqSize.w);
+        maxSize.h = std::max(maxSize.h, reqSize.h);
       }
     }
 
     if (m_titleLabel)
-      maxSize.w = MAX(maxSize.w, m_titleLabel->sizeHint().w);
+      maxSize.w = std::max(maxSize.w, m_titleLabel->sizeHint().w);
 
     ev.setSizeHint(maxSize.w + border().width(),
                    maxSize.h + border().height());
@@ -583,18 +586,18 @@ void Window::windowSetPosition(const gfx::Rect& rect)
 
 void Window::limitSize(int* w, int* h)
 {
-  *w = MAX(*w, border().width());
-  *h = MAX(*h, border().height());
+  *w = std::max(*w, border().width());
+  *h = std::max(*h, border().height());
 }
 
 void Window::moveWindow(const gfx::Rect& rect, bool use_blit)
 {
-#define FLAGS (DrawableRegionFlags)(kCutTopWindows | kUseChildArea)
-
   Manager* manager = this->manager();
-  Message* msg;
 
-  manager->dispatchMessages();
+  // Discard enqueued kWinMoveMessage for this window because we are
+  // going to send a new kWinMoveMessage with the latest window
+  // bounds.
+  manager->removeMessagesFor(this, kWinMoveMessage);
 
   // Get the window's current position
   Rect old_pos = bounds();
@@ -605,13 +608,13 @@ void Window::moveWindow(const gfx::Rect& rect, bool use_blit)
   Rect man_pos = manager->bounds();
 
   // Send a kWinMoveMessage message to the window
-  msg = new Message(kWinMoveMessage);
-  msg->addRecipient(this);
+  Message* msg = new Message(kWinMoveMessage);
+  msg->setRecipient(this);
   manager->enqueueMessage(msg);
 
   // Get the region & the drawable region of the window
   Region oldDrawableRegion;
-  getDrawableRegion(oldDrawableRegion, FLAGS);
+  getDrawableRegion(oldDrawableRegion, kCutTopWindowsAndUseChildArea);
 
   // If the size of the window changes...
   if (old_pos.w != rect.w || old_pos.h != rect.h) {
@@ -627,7 +630,7 @@ void Window::moveWindow(const gfx::Rect& rect, bool use_blit)
   // Get the new drawable region of the window (it's new because we
   // moved the window to "rect")
   Region newDrawableRegion;
-  getDrawableRegion(newDrawableRegion, FLAGS);
+  getDrawableRegion(newDrawableRegion, kCutTopWindowsAndUseChildArea);
 
   // First of all, we have to find the manager region to invalidate,
   // it's the old window drawable region without the new window
@@ -670,7 +673,7 @@ void Window::moveWindow(const gfx::Rect& rect, bool use_blit)
     invalidateRegion(reg1);
   }
 
-  manager->invalidateDisplayRegion(invalidManagerRegion);
+  manager->invalidateRegion(invalidManagerRegion);
 
   onWindowMovement();
 }

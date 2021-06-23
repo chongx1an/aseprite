@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2019-2021  Igara Studio S.A.
 // Copyright (C) 2017  David Capello
 //
 // This program is distributed under the terms of
@@ -14,19 +15,21 @@
 #include "app/extensions.h"
 #include "app/modules/palettes.h"
 #include "app/ui/skin/skin_theme.h"
-#include "base/bind.h"
-#include "doc/conversion_she.h"
+#include "app/util/conversion_to_surface.h"
 #include "doc/image.h"
 #include "doc/image_ref.h"
 #include "doc/primitives.h"
+#include "os/surface.h"
+#include "os/system.h"
+#include "render/dithering.h"
 #include "render/gradient.h"
 #include "render/quantization.h"
-#include "she/surface.h"
-#include "she/system.h"
 #include "ui/graphics.h"
 #include "ui/listitem.h"
 #include "ui/paint_event.h"
 #include "ui/size_hint_event.h"
+
+#include <algorithm>
 
 namespace app {
 
@@ -42,8 +45,7 @@ public:
              const std::string& text)
     : ListItem(text)
     , m_matrixOnly(false)
-    , m_algo(algo)
-    , m_matrix(matrix)
+    , m_dithering(algo, matrix)
     , m_preview(nullptr)
     , m_palId(0)
     , m_palMods(0)
@@ -54,19 +56,28 @@ public:
              const std::string& text)
     : ListItem(text)
     , m_matrixOnly(true)
-    , m_algo(render::DitheringAlgorithm::None)
-    , m_matrix(matrix)
+    , m_dithering(render::DitheringAlgorithm::None, matrix)
     , m_preview(nullptr)
     , m_palId(0)
     , m_palMods(0)
   {
   }
 
-  render::DitheringAlgorithm algo() const { return m_algo; }
-  render::DitheringMatrix matrix() const { return m_matrix; }
+  ~DitherItem() {
+    if (m_preview)
+      m_preview->dispose();
+  }
+
+  render::DitheringAlgorithm algo() const {
+    return m_dithering.algorithm();
+  }
+
+  render::DitheringMatrix matrix() const {
+    return m_dithering.matrix();
+  }
 
 private:
-  she::Surface* preview() {
+  os::Surface* preview() {
     const doc::Palette* palette = get_current_palette();
     ASSERT(palette);
 
@@ -90,7 +101,8 @@ private:
       gfx::Point(w-1, 0),
       doc::rgba(0, 0, 0, 255),
       doc::rgba(255, 255, 255, 255),
-      m_matrixOnly ? m_matrix: render::DitheringMatrix());
+      (m_matrixOnly ? m_dithering.matrix():
+                      render::DitheringMatrix()));
 
     doc::ImageRef image2;
     if (m_matrixOnly) {
@@ -101,12 +113,12 @@ private:
       doc::clear_image(image2.get(), 0);
       render::convert_pixel_format(
         image1.get(), image2.get(), IMAGE_INDEXED,
-        m_algo, m_matrix, nullptr, palette, true, -1, nullptr);
+        m_dithering, nullptr, palette, true, -1, nullptr);
     }
 
-    m_preview = she::instance()->createRgbaSurface(w, h);
-    doc::convert_image_to_surface(image2.get(), palette, m_preview,
-                                  0, 0, 0, 0, w, h);
+    m_preview = os::instance()->createRgbaSurface(w, h);
+    convert_image_to_surface(image2.get(), palette, m_preview,
+                             0, 0, 0, 0, w, h);
 
     m_palId = palette->id();
     m_palMods = palette->getModifications();
@@ -116,8 +128,8 @@ private:
   void onSizeHint(SizeHintEvent& ev) override {
     gfx::Size sz = textSize();
 
-    sz.w = MAX(sz.w, preview()->width()) + 4*guiscale();
-    sz.h += 6*guiscale() + preview()->height();
+    sz.w = std::max(sz.w, preview()->width()*guiscale()) + 4*guiscale();
+    sz.h += 6*guiscale() + preview()->height()*guiscale();
 
     ev.setSizeHint(sz);
   }
@@ -145,14 +157,17 @@ private:
                            rc.y+2*guiscale()));
     g->drawRgbaSurface(
       preview(),
-      rc.x+2*guiscale(),
-      rc.y+4*guiscale()+textsz.h);
+      preview()->bounds(),
+      gfx::Rect(
+        rc.x+2*guiscale(),
+        rc.y+4*guiscale()+textsz.h,
+        preview()->width()*guiscale(),
+        preview()->height()*guiscale()));
   }
 
   bool m_matrixOnly;
-  render::DitheringAlgorithm m_algo;
-  render::DitheringMatrix m_matrix;
-  she::Surface* m_preview;
+  render::Dithering m_dithering;
+  os::Surface* m_preview;
   doc::ObjectId m_palId;
   int m_palMods;
 };
@@ -168,15 +183,22 @@ DitheringSelector::DitheringSelector(Type type)
   // regenerate this DitheringSelector
   m_extChanges =
     extensions.DitheringMatricesChange.connect(
-      base::Bind<void>(&DitheringSelector::regenerate, this));
+      [this]{ regenerate(); });
 
   setUseCustomWidget(true);
   regenerate();
 }
 
+void DitheringSelector::onInitTheme(ui::InitThemeEvent& ev)
+{
+  ComboBox::onInitTheme(ev);
+  if (getItem(0))
+    setSizeHint(getItem(0)->sizeHint());
+}
+
 void DitheringSelector::regenerate()
 {
-  removeAllItems();
+  deleteAllItems();
 
   Extensions& extensions = App::instance()->extensions();
   auto ditheringMatrices = extensions.ditheringMatrices();
@@ -199,6 +221,11 @@ void DitheringSelector::regenerate()
             it.matrix(),
             "Old Dithering+" + it.name()));
       }
+      addItem(
+        new DitherItem(
+          render::DitheringAlgorithm::ErrorDiffusion,
+          render::DitheringMatrix(),
+          "Floyd-Steinberg Error Diffusion Dithering"));
       break;
     case SelectMatrix:
       addItem(new DitherItem(render::DitheringMatrix(), "No Dithering"));

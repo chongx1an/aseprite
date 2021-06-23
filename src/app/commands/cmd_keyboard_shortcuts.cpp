@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -15,6 +16,7 @@
 #include "app/file_selector.h"
 #include "app/i18n/strings.h"
 #include "app/match_words.h"
+#include "app/modules/gui.h"
 #include "app/resource_finder.h"
 #include "app/tools/tool.h"
 #include "app/tools/tool_box.h"
@@ -24,7 +26,6 @@
 #include "app/ui/select_accelerator.h"
 #include "app/ui/separator_in_view.h"
 #include "app/ui/skin/skin_theme.h"
-#include "base/bind.h"
 #include "base/fs.h"
 #include "base/scoped_value.h"
 #include "base/split_string.h"
@@ -43,7 +44,9 @@
 
 #include "keyboard_shortcuts.xml.h"
 
+#include <algorithm>
 #include <map>
+#include <memory>
 
 #define KEYBOARD_FILENAME_EXTENSION "aseprite-keys"
 
@@ -257,7 +260,7 @@ private:
         m_headerItem->contextXPos() +
         Graphics::measureUITextLength(
           convertKeyContextToUserFriendlyString(m_key->keycontext()), font());
-      size.w = MAX(size.w, w);
+      size.w = std::max(size.w, w);
     }
 
     if (m_key && !m_key->accels().empty()) {
@@ -372,13 +375,13 @@ private:
 
               m_changeConn = obs::connection();
               m_changeButton.reset(new Button(""));
-              m_changeConn = m_changeButton->Click.connect(base::Bind<void>(&KeyItem::onChangeAccel, this, i));
+              m_changeConn = m_changeButton->Click.connect([this, i]{ onChangeAccel(i); });
               m_changeButton->setStyle(SkinTheme::instance()->styles.miniButton());
               addChild(m_changeButton.get());
 
               m_deleteConn = obs::connection();
               m_deleteButton.reset(new Button(""));
-              m_deleteConn = m_deleteButton->Click.connect(base::Bind<void>(&KeyItem::onDeleteAccel, this, i));
+              m_deleteConn = m_deleteButton->Click.connect([this, i]{ onDeleteAccel(i); });
               m_deleteButton->setStyle(SkinTheme::instance()->styles.miniButton());
               addChild(m_deleteButton.get());
 
@@ -405,7 +408,7 @@ private:
               (!m_menuitem || m_menuitem->getCommand())) {
             m_addConn = obs::connection();
             m_addButton.reset(new Button(""));
-            m_addConn = m_addButton->Click.connect(base::Bind<void>(&KeyItem::onAddAccel, this));
+            m_addConn = m_addButton->Click.connect([this]{ onAddAccel(); });
             m_addButton->setStyle(SkinTheme::instance()->styles.miniButton());
             addChild(m_addButton.get());
 
@@ -462,9 +465,9 @@ private:
   AppMenuItem* m_menuitem;
   int m_level;
   ui::Accelerators m_newAccels;
-  base::SharedPtr<ui::Button> m_changeButton;
-  base::SharedPtr<ui::Button> m_deleteButton;
-  base::SharedPtr<ui::Button> m_addButton;
+  std::shared_ptr<ui::Button> m_changeButton;
+  std::shared_ptr<ui::Button> m_deleteButton;
+  std::shared_ptr<ui::Button> m_addButton;
   obs::scoped_connection m_changeConn;
   obs::scoped_connection m_deleteConn;
   obs::scoped_connection m_addConn;
@@ -507,14 +510,14 @@ public:
 
     onWheelBehaviorChange();
 
-    wheelBehavior()->ItemChange.connect(base::Bind<void>(&KeyboardShortcutsWindow::onWheelBehaviorChange, this));
-    wheelZoom()->Click.connect(base::Bind<void>(&KeyboardShortcutsWindow::onWheelZoomChange, this));
+    wheelBehavior()->ItemChange.connect([this]{ onWheelBehaviorChange(); });
+    wheelZoom()->Click.connect([this]{ onWheelZoomChange(); });
 
-    search()->Change.connect(base::Bind<void>(&KeyboardShortcutsWindow::onSearchChange, this));
-    section()->Change.connect(base::Bind<void>(&KeyboardShortcutsWindow::onSectionChange, this));
-    importButton()->Click.connect(base::Bind<void>(&KeyboardShortcutsWindow::onImport, this));
-    exportButton()->Click.connect(base::Bind<void>(&KeyboardShortcutsWindow::onExport, this));
-    resetButton()->Click.connect(base::Bind<void>(&KeyboardShortcutsWindow::onReset, this));
+    search()->Change.connect([this]{ onSearchChange(); });
+    section()->Change.connect([this]{ onSectionChange(); });
+    importButton()->Click.connect([this]{ onImport(); });
+    exportButton()->Click.connect([this]{ onExport(); });
+    resetButton()->Click.connect([this]{ onReset(); });
 
     fillAllLists();
 
@@ -533,6 +536,7 @@ public:
   }
 
 private:
+
   void deleteAllKeyItems() {
     deleteList(searchList());
     deleteList(menus());
@@ -777,7 +781,7 @@ private:
   void fillMenusList(ListBox* listbox, Menu* menu, int level) {
     for (auto child : menu->children()) {
       if (AppMenuItem* menuItem = dynamic_cast<AppMenuItem*>(child)) {
-        if (menuItem == AppMenus::instance()->getRecentListMenuitem())
+        if (menuItem->isRecentFileItem())
           continue;
 
         KeyItem* keyItem = new KeyItem(
@@ -812,6 +816,19 @@ private:
     }
   }
 
+  bool onProcessMessage(ui::Message* msg) override {
+    switch (msg->type()) {
+      case kOpenMessage:
+        load_window_pos(this, "KeyboardShortcuts");
+        invalidate();
+        break;
+      case kCloseMessage:
+        save_window_pos(this, "KeyboardShortcuts");
+        break;
+    }
+    return app::gen::KeyboardShortcuts::onProcessMessage(msg);
+  }
+
   app::KeyboardShortcuts& m_keys;
   MenuKeys& m_menuKeys;
   std::vector<ListBox*> m_listBoxes;
@@ -825,7 +842,6 @@ private:
 class KeyboardShortcutsCommand : public Command {
 public:
   KeyboardShortcutsCommand();
-  Command* clone() const override { return new KeyboardShortcutsCommand(*this); }
 
 protected:
   void onLoadParams(const Params& params) override;
@@ -866,6 +882,7 @@ void KeyboardShortcutsCommand::onExecute(Context* context)
   KeyboardShortcutsWindow window(keys, menuKeys, neededSearchCopy);
 
   window.setBounds(gfx::Rect(0, 0, ui::display_w()*3/4, ui::display_h()*3/4));
+  window.loadLayout();
 
   window.centerWindow();
   window.setVisible(true);
@@ -901,7 +918,7 @@ void KeyboardShortcutsCommand::fillMenusKeys(app::KeyboardShortcuts& keys,
 {
   for (auto child : menu->children()) {
     if (AppMenuItem* menuItem = dynamic_cast<AppMenuItem*>(child)) {
-      if (menuItem == AppMenus::instance()->getRecentListMenuitem())
+      if (menuItem->isRecentFileItem())
         continue;
 
       if (menuItem->getCommand()) {

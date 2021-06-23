@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2020  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
@@ -14,11 +15,11 @@
 
 #include "app/check_update_delegate.h"
 #include "app/pref/preferences.h"
-#include "base/bind.h"
 #include "base/convert_to.h"
 #include "base/launcher.h"
 #include "base/replace_string.h"
 #include "base/version.h"
+#include "ver/info.h"
 
 #include <ctime>
 #include <sstream>
@@ -125,7 +126,7 @@ void CheckUpdateThreadLauncher::launch()
   m_delegate->onCheckingUpdates();
 
   m_bgJob.reset(new CheckUpdateBackgroundJob);
-  m_thread.reset(new base::thread(base::Bind<void>(&CheckUpdateThreadLauncher::checkForUpdates, this)));
+  m_thread.reset(new base::thread([this]{ checkForUpdates(); }));
 
   // Start a timer to monitoring the progress of the background job
   // executed in "m_thread". The "onMonitoringTick" method will be
@@ -202,7 +203,7 @@ void CheckUpdateThreadLauncher::checkForUpdates()
 
 void CheckUpdateThreadLauncher::showUI()
 {
-  std::string localVersionStr = VERSION;
+  std::string localVersionStr = get_app_version();
   base::replace_string(localVersionStr, "-x64", "");
   bool newVer = false;
 

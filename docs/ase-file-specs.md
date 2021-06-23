@@ -1,7 +1,5 @@
 # Aseprite File Format (.ase/.aseprite) Specifications
 
-> Copyright (C) 2001-2018 by David Capello
-
 1. [References](#references)
 2. [Introduction](#introduction)
 3. [Header](#header)
@@ -73,7 +71,12 @@ A 128-byte header (same as FLC/FLI header, but with other magic number):
     BYTE        Pixel width (pixel ratio is "pixel width/pixel height").
                 If this or pixel height field is zero, pixel ratio is 1:1
     BYTE        Pixel height
-    BYTE[92]    For future (set to zero)
+    SHORT       X position of the grid
+    SHORT       Y position of the grid
+    WORD        Grid width (zero if there is no grid, grid size
+                is 16x16 on Aseprite by default)
+    WORD        Grid height (zero if there is no grid)
+    BYTE[84]    For future (set to zero)
 
 ## Frames
 
@@ -213,6 +216,26 @@ Adds extra information to the latest read cel.
     FIXED       Height of the cel in the sprite
     BYTE[16]    For future use (set to zero)
 
+### Color Profile Chunk (0x2007)
+
+Color profile for RGB or grayscale values.
+
+    WORD        Type
+                  0 - no color profile (as in old .aseprite files)
+                  1 - use sRGB
+                  2 - use the embedded ICC profile
+    WORD        Flags
+                  1 - use special fixed gamma
+    FIXED       Fixed gamma (1.0 = linear)
+                Note: The gamma in sRGB is 2.2 in overall but it doesn't use
+                this fixed gamma, because sRGB uses different gamma sections
+                (linear and non-linear). If sRGB is specified with a fixed
+                gamma = 1.0, it means that this is Linear sRGB.
+    BYTE[8]     Reserved (set to zero]
+    + If type = ICC:
+      DWORD     ICC profile data length
+      BYTE[]    ICC profile data. More info: http://www.color.org/ICC1V42.pdf
+
 ### Mask Chunk (0x2016) DEPRECATED
 
     SHORT       X position
@@ -227,9 +250,9 @@ Adds extra information to the latest read cel.
 
 ### Path Chunk (0x2017)
 
-  Never used.
+Never used.
 
-### Frame Tags Chunk (0x2018)
+### Tags Chunk (0x2018)
 
     WORD        Number of tags
     BYTE[8]     For future (set to zero)

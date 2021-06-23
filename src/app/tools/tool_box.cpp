@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -19,7 +20,6 @@
 #include "app/tools/stroke.h"
 #include "app/tools/tool_group.h"
 #include "app/tools/tool_loop.h"
-#include "base/bind.h"
 #include "base/exception.h"
 #include "doc/algo.h"
 #include "doc/algorithm/floodfill.h"
@@ -49,11 +49,13 @@ const char* WellKnownTools::Pencil = "pencil";
 const char* WellKnownTools::Eraser = "eraser";
 const char* WellKnownTools::Eyedropper = "eyedropper";
 const char* WellKnownTools::Hand = "hand";
+const char* WellKnownTools::Move = "move";
 
 const char* WellKnownInks::Selection = "selection";
 const char* WellKnownInks::Paint = "paint";
 const char* WellKnownInks::PaintFg = "paint_fg";
 const char* WellKnownInks::PaintBg = "paint_bg";
+const char* WellKnownInks::PaintAlphaCompositing = "paint_alpha_compositing";
 const char* WellKnownInks::PaintCopy = "paint_copy";
 const char* WellKnownInks::PaintLockAlpha = "paint_lock_alpha";
 const char* WellKnownInks::Shading = "shading";
@@ -66,6 +68,7 @@ const char* WellKnownInks::PickBg = "pick_bg";
 const char* WellKnownInks::Zoom = "zoom";
 const char* WellKnownInks::Scroll = "scroll";
 const char* WellKnownInks::Move = "move";
+const char* WellKnownInks::SelectLayerAndMove = "select_layer_and_move";
 const char* WellKnownInks::Slice = "slice";
 const char* WellKnownInks::MoveSlice = "move_slice";
 const char* WellKnownInks::Blur = "blur";
@@ -112,6 +115,7 @@ ToolBox::ToolBox()
   m_inks[WellKnownInks::Paint]           = new PaintInk(PaintInk::Simple);
   m_inks[WellKnownInks::PaintFg]         = new PaintInk(PaintInk::WithFg);
   m_inks[WellKnownInks::PaintBg]         = new PaintInk(PaintInk::WithBg);
+  m_inks[WellKnownInks::PaintAlphaCompositing] = new PaintInk(PaintInk::AlphaCompositing);
   m_inks[WellKnownInks::PaintCopy]       = new PaintInk(PaintInk::Copy);
   m_inks[WellKnownInks::PaintLockAlpha]  = new PaintInk(PaintInk::LockAlpha);
   m_inks[WellKnownInks::Gradient]        = new GradientInk();
@@ -123,7 +127,8 @@ ToolBox::ToolBox()
   m_inks[WellKnownInks::PickBg]          = new PickInk(PickInk::Bg);
   m_inks[WellKnownInks::Zoom]            = new ZoomInk();
   m_inks[WellKnownInks::Scroll]          = new ScrollInk();
-  m_inks[WellKnownInks::Move]            = new MoveInk();
+  m_inks[WellKnownInks::Move]            = new MoveInk(false);
+  m_inks[WellKnownInks::SelectLayerAndMove] = new MoveInk(true);
   m_inks[WellKnownInks::Slice]           = new SliceInk();
   m_inks[WellKnownInks::Blur]            = new BlurInk();
   m_inks[WellKnownInks::Jumble]          = new JumbleInk();
@@ -210,7 +215,7 @@ void ToolBox::loadTools()
     if (!groupId)
       throw base::Exception("The configuration file has a <group> without 'id' or 'text' attributes.");
 
-    LOG(VERBOSE) << "TOOL: Group " << groupId << "\n";
+    LOG(VERBOSE, "TOOL: %s group\n", groupId);
 
     // Find an existent ToolGroup (this is useful in case we are
     // reloading tool text/tooltips).
@@ -252,7 +257,7 @@ void ToolBox::loadTools()
       tool->setDefaultBrushSize(
         defaultBrushSize ? std::strtol(defaultBrushSize, nullptr, 10): 1);
 
-      LOG(VERBOSE) << "TOOL: Tool " << toolId << " in group " << groupId << " found\n";
+      LOG(VERBOSE, "TOOL: %s.%s tool\n", groupId, toolId);
 
       loadToolProperties(xmlTool, tool, 0, "left");
       loadToolProperties(xmlTool, tool, 1, "right");

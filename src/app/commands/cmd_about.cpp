@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2020-2021  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -12,7 +13,8 @@
 #include "app/commands/command.h"
 #include "app/modules/gui.h"
 #include "app/ui/main_window.h"
-#include "base/bind.h"
+#include "fmt/format.h"
+#include "ver/info.h"
 
 #include "about.xml.h"
 
@@ -23,7 +25,6 @@ using namespace ui;
 class AboutCommand : public Command {
 public:
   AboutCommand();
-  Command* clone() const override { return new AboutCommand(*this); }
 
 protected:
   void onExecute(Context* context) override;
@@ -37,11 +38,16 @@ AboutCommand::AboutCommand()
 void AboutCommand::onExecute(Context* context)
 {
   gen::About window;
-  window.title()->setText(PACKAGE " v" VERSION);
+  window.title()->setText(fmt::format("{} v{}", get_app_name(), get_app_version()));
   window.licenses()->Click.connect(
     [&window]{
       window.closeWindow(nullptr);
       App::instance()->mainWindow()->showBrowser("docs/LICENSES.md");
+    });
+  window.credits()->Click.connect(
+    [&window]{
+      window.closeWindow(nullptr);
+      App::instance()->mainWindow()->showBrowser("README.md", "Authors");
     });
   window.openWindowInForeground();
 }

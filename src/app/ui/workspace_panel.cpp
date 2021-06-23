@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2019  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
@@ -47,6 +48,7 @@ WorkspacePanel::WorkspacePanel(PanelType panelType)
   , m_topTime(0)
   , m_bottomTime(0)
 {
+  enableFlags(IGNORE_MOUSE);
   InitTheme.connect(
     [this]{
       SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
@@ -148,6 +150,9 @@ void WorkspacePanel::setActiveView(WorkspaceView* view)
     m_tabs->selectTab(dynamic_cast<TabView*>(view));
 
   adjustActiveViewBounds();
+
+  if (m_activeView)
+    m_activeView->onWorkspaceViewSelected();
 }
 
 void WorkspacePanel::onPaint(PaintEvent& ev)

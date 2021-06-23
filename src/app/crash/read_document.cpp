@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -13,6 +14,7 @@
 #include "app/console.h"
 #include "app/crash/internals.h"
 #include "app/doc.h"
+#include "base/clamp.h"
 #include "base/convert_to.h"
 #include "base/exception.h"
 #include "base/fs.h"
@@ -24,8 +26,6 @@
 #include "doc/cel_io.h"
 #include "doc/cels_range.h"
 #include "doc/frame.h"
-#include "doc/frame_tag.h"
-#include "doc/frame_tag_io.h"
 #include "doc/image_io.h"
 #include "doc/layer.h"
 #include "doc/palette.h"
@@ -35,6 +35,10 @@
 #include "doc/sprite.h"
 #include "doc/string_io.h"
 #include "doc/subobjects_io.h"
+#include "doc/tag.h"
+#include "doc/tag_io.h"
+#include "doc/user_data_io.h"
+#include "fixmath/fixmath.h"
 
 #include <fstream>
 #include <map>
@@ -50,12 +54,14 @@ namespace {
 
 class Reader : public SubObjectsIO {
 public:
-  Reader(const std::string& dir)
+  Reader(const std::string& dir,
+         base::task_token* t)
     : m_sprite(nullptr)
     , m_dir(dir)
     , m_docId(0)
     , m_docVersions(nullptr)
-    , m_loadInfo(nullptr) {
+    , m_loadInfo(nullptr)
+    , m_taskToken(t) {
     for (const auto& fn : base::list_files(dir)) {
       auto i = fn.find('-');
       if (i == std::string::npos)
@@ -193,17 +199,17 @@ private:
   }
 
   Sprite* readSprite(std::ifstream& s) {
-    PixelFormat format = (PixelFormat)read8(s);
+    ColorMode mode = (ColorMode)read8(s);
     int w = read16(s);
     int h = read16(s);
     color_t transparentColor = read32(s);
     frame_t nframes = read32(s);
 
-    if (format != IMAGE_RGB &&
-        format != IMAGE_INDEXED &&
-        format != IMAGE_GRAYSCALE) {
+    if (mode != ColorMode::RGB &&
+        mode != ColorMode::INDEXED &&
+        mode != ColorMode::GRAYSCALE) {
       if (!m_loadInfo)
-        Console().printf("Invalid sprite format #%d\n", (int)format);
+        Console().printf("Invalid sprite color mode #%d\n", (int)mode);
       return nullptr;
     }
 
@@ -214,14 +220,14 @@ private:
     }
 
     if (m_loadInfo) {
-      m_loadInfo->format = format;
+      m_loadInfo->mode = mode;
       m_loadInfo->width = w;
       m_loadInfo->height = h;
       m_loadInfo->frames = nframes;
-      return (Sprite*)1;
+      return (Sprite*)1;        // TODO improve this
     }
 
-    std::unique_ptr<Sprite> spr(new Sprite(format, w, h, 256));
+    std::unique_ptr<Sprite> spr(new Sprite(ImageSpec(mode, w, h), 256));
     m_sprite = spr.get();
     spr->setTransparentColor(transparentColor);
 
@@ -242,7 +248,10 @@ private:
       std::map<ObjectId, LayerGroup*> layersMap;
       layersMap[0] = spr->root(); // parentId = 0 is the root level
 
-      for (int i = 0; i < nlayers; ++i) {
+      for (int i=0; i<nlayers; ++i) {
+        if (canceled())
+          return nullptr;
+
         ObjectId layId = read32(s);
         ObjectId parentId = read32(s);
 
@@ -265,10 +274,39 @@ private:
       Console().printf("Invalid number of layers #%d\n", nlayers);
     }
 
+    // Read all cels
+    for (size_t i=0; i<m_celsToLoad.size(); ++i) {
+      if (canceled())
+        return nullptr;
+
+      const auto& pair = m_celsToLoad[i];
+      LayerImage* lay = doc::get<LayerImage>(pair.first);
+      if (!lay)
+        continue;
+
+      ObjectId celId = pair.second;
+
+      Cel* cel = loadObject<Cel*>("cel", celId, &Reader::readCel);
+      if (cel) {
+        // Expand sprite size
+        if (cel->frame() > m_sprite->lastFrame())
+          m_sprite->setTotalFrames(cel->frame()+1);
+
+        lay->addCel(cel);
+      }
+
+      if (m_taskToken) {
+        m_taskToken->set_progress(float(i) / float(m_celsToLoad.size()));
+      }
+    }
+
     // Read palettes
     int npalettes = read32(s);
     if (npalettes >= 1 && npalettes < 0xfffff) {
       for (int i = 0; i < npalettes; ++i) {
+        if (canceled())
+          return nullptr;
+
         ObjectId palId = read32(s);
         Palette* pal = loadObject<Palette*>("pal", palId, &Reader::readPalette);
         if (pal)
@@ -280,10 +318,13 @@ private:
     int nfrtags = read32(s);
     if (nfrtags >= 1 && nfrtags < 0xfffff) {
       for (int i = 0; i < nfrtags; ++i) {
+        if (canceled())
+          return nullptr;
+
         ObjectId tagId = read32(s);
-        FrameTag* tag = loadObject<FrameTag*>("frtag", tagId, &Reader::readFrameTag);
+        Tag* tag = loadObject<Tag*>("frtag", tagId, &Reader::readTag);
         if (tag)
-          spr->frameTags().add(tag);
+          spr->tags().add(tag);
       }
     }
 
@@ -291,6 +332,9 @@ private:
     int nslices = read32(s);
     if (nslices >= 1 && nslices < 0xffffff) {
       for (int i = 0; i < nslices; ++i) {
+        if (canceled())
+          return nullptr;
+
         ObjectId sliceId = read32(s);
         Slice* slice = loadObject<Slice*>("slice", sliceId, &Reader::readSlice);
         if (slice)
@@ -298,7 +342,52 @@ private:
       }
     }
 
+    // Read color space
+    if (!s.eof()) {
+      gfx::ColorSpacePtr colorSpace = readColorSpace(s);
+      if (colorSpace)
+        spr->setColorSpace(colorSpace);
+    }
+
+    // Read grid bounds
+    if (!s.eof()) {
+      gfx::Rect gridBounds = readGridBounds(s);
+      if (!gridBounds.isEmpty())
+        spr->setGridBounds(gridBounds);
+    }
+
     return spr.release();
+  }
+
+  gfx::ColorSpacePtr readColorSpace(std::ifstream& s) {
+    const gfx::ColorSpace::Type type = (gfx::ColorSpace::Type)read16(s);
+    const gfx::ColorSpace::Flag flags = (gfx::ColorSpace::Flag)read16(s);
+    const double gamma = fixmath::fixtof(read32(s));
+    const size_t n = read32(s);
+
+    // If the color space file is to big, it's because the sprite file
+    // is invalid or or from an old session without color spcae.
+    if (n > 1024*1024*64) // 64 MB is too much for an ICC file
+      return nullptr;
+
+    std::vector<uint8_t> buf(n);
+    if (n)
+      s.read((char*)&buf[0], n);
+    std::string name = read_string(s);
+
+    auto colorSpace = std::make_shared<gfx::ColorSpace>(
+      type, flags, gamma, std::move(buf));
+    colorSpace->setName(name);
+    return colorSpace;
+  }
+
+  gfx::Rect readGridBounds(std::ifstream& s) {
+    gfx::Rect grid;
+    grid.x = (int16_t)read16(s);
+    grid.y = (int16_t)read16(s);
+    grid.w = read16(s);
+    grid.h = read16(s);
+    return grid;
   }
 
   // TODO could we use doc::read_layer() here?
@@ -309,42 +398,50 @@ private:
            type == ObjectType::LayerGroup);
 
     std::string name = read_string(s);
+    std::unique_ptr<Layer> lay;
 
-    if (type == ObjectType::LayerImage) {
-      std::unique_ptr<LayerImage> lay(new LayerImage(m_sprite));
-      lay->setName(name);
-      lay->setFlags(flags);
+    switch (type) {
+      case ObjectType::LayerImage: {
+        lay.reset(new LayerImage(m_sprite));
+        lay->setName(name);
+        lay->setFlags(flags);
 
-      // Blend mode & opacity
-      lay->setBlendMode((BlendMode)read16(s));
-      lay->setOpacity(read8(s));
+        // Blend mode & opacity
+        static_cast<LayerImage*>(lay.get())->setBlendMode((BlendMode)read16(s));
+        static_cast<LayerImage*>(lay.get())->setOpacity(read8(s));
 
-      // Cels
-      int ncels = read32(s);
-      for (int i=0; i<ncels; ++i) {
-        ObjectId celId = read32(s);
-        Cel* cel = loadObject<Cel*>("cel", celId, &Reader::readCel);
-        if (cel) {
-          // Expand sprite size
-          if (cel->frame() > m_sprite->lastFrame())
-            m_sprite->setTotalFrames(cel->frame()+1);
+        // Cels
+        int ncels = read32(s);
+        for (int i=0; i<ncels; ++i) {
+          if (canceled())
+            return nullptr;
 
-          lay->addCel(cel);
+          // Add a new cel to load in the future after we load all layers
+          ObjectId celId = read32(s);
+          m_celsToLoad.push_back(std::make_pair(lay->id(), celId));
         }
+        break;
       }
+
+      case ObjectType::LayerGroup:
+        lay.reset(new LayerGroup(m_sprite));
+        lay->setName(name);
+        lay->setFlags(flags);
+        break;
+
+      default:
+        Console().printf("Unable to load layer named '%s', type #%d\n",
+                         name.c_str(), (int)type);
+        break;
+    }
+
+    if (lay) {
+      UserData userData = read_user_data(s);
+      lay->setUserData(userData);
       return lay.release();
     }
-    else if (type == ObjectType::LayerGroup) {
-      std::unique_ptr<LayerGroup> lay(new LayerGroup(m_sprite));
-      lay->setName(name);
-      lay->setFlags(flags);
-      return lay.release();
-    }
-    else {
-      Console().printf("Unable to load layer named '%s', type #%d\n",
-        name.c_str(), (int)type);
+    else
       return nullptr;
-    }
   }
 
   Cel* readCel(std::ifstream& s) {
@@ -363,8 +460,8 @@ private:
     return read_palette(s);
   }
 
-  FrameTag* readFrameTag(std::ifstream& s) {
-    return read_frame_tag(s, false);
+  Tag* readTag(std::ifstream& s) {
+    return read_tag(s, false);
   }
 
   Slice* readSlice(std::ifstream& s) {
@@ -394,14 +491,23 @@ private:
     }
   }
 
+  bool canceled() const {
+    if (m_taskToken)
+      return m_taskToken->canceled();
+    else
+      return false;
+  }
+
   Sprite* m_sprite;    // Used to pass the sprite in LayerImage() ctor
   std::string m_dir;
   ObjectVersion m_docId;
   ObjVersionsMap m_objVersions;
   ObjVersions* m_docVersions;
   DocumentInfo* m_loadInfo;
+  std::vector<std::pair<ObjectId, ObjectId> > m_celsToLoad;
   std::map<ObjectId, ImageRef> m_images;
   std::map<ObjectId, CelDataRef> m_celdatas;
+  base::task_token* m_taskToken;
 };
 
 } // anonymous namespace
@@ -411,36 +517,43 @@ private:
 
 bool read_document_info(const std::string& dir, DocumentInfo& info)
 {
-  return Reader(dir).loadDocumentInfo(info);
+  return Reader(dir, nullptr).loadDocumentInfo(info);
 }
 
-Doc* read_document(const std::string& dir)
+Doc* read_document(const std::string& dir,
+                   base::task_token* t)
 {
-  return Reader(dir).loadDocument();
+  return Reader(dir, t).loadDocument();
 }
 
 Doc* read_document_with_raw_images(const std::string& dir,
-                                   RawImagesAs as)
+                                   RawImagesAs as,
+                                   base::task_token* t)
 {
-  Reader reader(dir);
+  Reader reader(dir, t);
 
   DocumentInfo info;
   if (!reader.loadDocumentInfo(info)) {
-    info.format = IMAGE_RGB;
+    info.mode = ColorMode::RGB;
     info.width = 256;
     info.height = 256;
     info.filename = "Unknown";
   }
-  info.width = MID(1, info.width, 99999);
-  info.height = MID(1, info.height, 99999);
-  Sprite* spr = new Sprite(info.format, info.width, info.height, 256);
+  info.width = base::clamp(info.width, 1, 99999);
+  info.height = base::clamp(info.height, 1, 99999);
+  Sprite* spr = new Sprite(ImageSpec(info.mode, info.width, info.height), 256);
 
   // Load each image as a new frame
   auto lay = new LayerImage(spr);
   spr->root()->addLayer(lay);
 
+  int i = 0;
   frame_t frame = 0;
-  for (const auto& fn : base::list_files(dir)) {
+  auto fns = base::list_files(dir);
+  for (const auto& fn : fns) {
+    if (t)
+      t->set_progress((i++) / fns.size());
+
     if (fn.compare(0, 3, "img") != 0)
       continue;
 

@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -35,15 +36,22 @@
 #include "app/ui/status_bar.h"
 #include "app/ui/toolbar.h"
 #include "app/ui_context.h"
+#include "app/util/open_batch.h"
+#include "base/clamp.h"
+#include "base/fs.h"
 #include "base/memory.h"
-#include "base/shared_ptr.h"
+#include "base/string.h"
 #include "doc/sprite.h"
-#include "she/display.h"
-#include "she/error.h"
-#include "she/surface.h"
-#include "she/system.h"
+#include "os/display.h"
+#include "os/error.h"
+#include "os/surface.h"
+#include "os/system.h"
 #include "ui/intern.h"
 #include "ui/ui.h"
+
+#ifdef ENABLE_STEAM
+  #include "steam/steam.h"
+#endif
 
 #include <algorithm>
 #include <list>
@@ -89,7 +97,7 @@ protected:
   void saveLayout(Widget* widget, const std::string& str) override;
 };
 
-static she::Display* main_display = NULL;
+static os::Display* main_display = NULL;
 static CustomizedGuiManager* manager = NULL;
 static Theme* gui_theme = NULL;
 
@@ -113,15 +121,15 @@ static bool create_main_display(bool gpuAccel,
   // executed.
   int scale = Preferences::instance().general.screenScale();
 
-  she::instance()->setGpuAcceleration(gpuAccel);
+  os::instance()->setGpuAcceleration(gpuAccel);
 
   try {
     if (w > 0 && h > 0) {
-      main_display = she::instance()->createDisplay(
-        w, h, (scale == 0 ? 2: MID(1, scale, 4)));
+      main_display = os::instance()->createDisplay(
+        w, h, (scale == 0 ? 2: base::clamp(scale, 1, 4)));
     }
   }
-  catch (const she::DisplayCreationException& e) {
+  catch (const os::DisplayCreationException& e) {
     lastError = e.what();
   }
 
@@ -129,13 +137,13 @@ static bool create_main_display(bool gpuAccel,
     for (int c=0; try_resolutions[c].width; ++c) {
       try {
         main_display =
-          she::instance()->createDisplay(
+          os::instance()->createDisplay(
             try_resolutions[c].width,
             try_resolutions[c].height,
             (scale == 0 ? try_resolutions[c].scale: scale));
         break;
       }
-      catch (const she::DisplayCreationException& e) {
+      catch (const os::DisplayCreationException& e) {
         lastError = e.what();
       }
     }
@@ -169,8 +177,8 @@ int init_module_gui()
     // If we've created the display with hardware acceleration,
     // now we try to do it without hardware acceleration.
     if (gpuAccel &&
-        (int(she::instance()->capabilities()) &
-         int(she::Capabilities::GpuAccelerationSwitch)) == int(she::Capabilities::GpuAccelerationSwitch)) {
+        (int(os::instance()->capabilities()) &
+         int(os::Capabilities::GpuAccelerationSwitch)) == int(os::Capabilities::GpuAccelerationSwitch)) {
       if (create_main_display(false, maximized, lastError)) {
         // Disable hardware acceleration
         pref.general.gpuAcceleration(false);
@@ -179,7 +187,7 @@ int init_module_gui()
   }
 
   if (!main_display) {
-    she::error_message(
+    os::error_message(
       ("Unable to create a user-interface display.\nDetails: "+lastError+"\n").c_str());
     return -1;
   }
@@ -198,6 +206,8 @@ int init_module_gui()
   // Set graphics options for next time
   save_gui_config();
 
+  update_displays_color_profile_from_preferences();
+
   return 0;
 }
 
@@ -215,10 +225,48 @@ void exit_module_gui()
   main_display->dispose();
 }
 
+void update_displays_color_profile_from_preferences()
+{
+  auto system = os::instance();
+
+  gen::WindowColorProfile windowProfile;
+  if (Preferences::instance().color.manage())
+    windowProfile = Preferences::instance().color.windowProfile();
+  else
+    windowProfile = gen::WindowColorProfile::SRGB;
+
+  switch (windowProfile) {
+    case gen::WindowColorProfile::MONITOR:
+      system->setDisplaysColorSpace(nullptr);
+      break;
+    case gen::WindowColorProfile::SRGB:
+      system->setDisplaysColorSpace(
+        system->createColorSpace(gfx::ColorSpace::MakeSRGB()));
+      break;
+    case gen::WindowColorProfile::SPECIFIC: {
+      std::string name =
+        Preferences::instance().color.windowProfileName();
+
+      std::vector<os::ColorSpacePtr> colorSpaces;
+      system->listColorSpaces(colorSpaces);
+
+      for (auto& cs : colorSpaces) {
+        auto gfxCs = cs->gfxColorSpace();
+        if (gfxCs->type() == gfx::ColorSpace::ICC &&
+            gfxCs->name() == name) {
+          system->setDisplaysColorSpace(cs);
+          break;
+        }
+      }
+      break;
+    }
+  }
+}
+
 static void load_gui_config(int& w, int& h, bool& maximized,
                             std::string& windowLayout)
 {
-  gfx::Size defSize = she::instance()->defaultNewDisplaySize();
+  gfx::Size defSize = os::instance()->defaultNewDisplaySize();
 
   w = get_config_int("GfxMode", "Width", defSize.w);
   h = get_config_int("GfxMode", "Height", defSize.h);
@@ -228,7 +276,7 @@ static void load_gui_config(int& w, int& h, bool& maximized,
 
 static void save_gui_config()
 {
-  she::Display* display = manager->getDisplay();
+  os::Display* display = manager->getDisplay();
   if (display) {
     set_config_bool("GfxMode", "Maximized", display->isMaximized());
     set_config_int("GfxMode", "Width", display->originalWidth());
@@ -260,7 +308,8 @@ void update_screen_for_document(const Doc* document)
   }
 }
 
-void load_window_pos(Widget* window, const char *section)
+void load_window_pos(Widget* window, const char* section,
+                     const bool limitMinSize)
 {
   // Default position
   Rect orig_pos = window->bounds();
@@ -269,11 +318,17 @@ void load_window_pos(Widget* window, const char *section)
   // Load configurated position
   pos = get_config_rect(section, "WindowPos", pos);
 
-  pos.w = MID(orig_pos.w, pos.w, ui::display_w());
-  pos.h = MID(orig_pos.h, pos.h, ui::display_h());
+  if (limitMinSize) {
+    pos.w = base::clamp(pos.w, orig_pos.w, ui::display_w());
+    pos.h = base::clamp(pos.h, orig_pos.h, ui::display_h());
+  }
+  else {
+    pos.w = std::min(pos.w, ui::display_w());
+    pos.h = std::min(pos.h, ui::display_h());
+  }
 
-  pos.setOrigin(Point(MID(0, pos.x, ui::display_w()-pos.w),
-      MID(0, pos.y, ui::display_h()-pos.h)));
+  pos.setOrigin(Point(base::clamp(pos.x, 0, ui::display_w()-pos.w),
+                      base::clamp(pos.y, 0, ui::display_h()-pos.h)));
 
   window->setBounds(pos);
 }
@@ -286,7 +341,7 @@ void save_window_pos(Widget* window, const char *section)
 // TODO Replace this with new theme styles
 Widget* setup_mini_font(Widget* widget)
 {
-  SkinPropertyPtr skinProp = get_skin_property(widget);
+  auto skinProp = get_skin_property(widget);
   skinProp->setMiniFont();
   return widget;
 }
@@ -294,7 +349,7 @@ Widget* setup_mini_font(Widget* widget)
 // TODO Replace this with new theme styles
 Widget* setup_mini_look(Widget* widget)
 {
-  SkinPropertyPtr skinProp = get_skin_property(widget);
+  auto skinProp = get_skin_property(widget);
   skinProp->setLook(MiniLook);
   return widget;
 }
@@ -313,24 +368,34 @@ void defer_invalid_rect(const gfx::Rect& rc)
   defered_invalid_region.createUnion(defered_invalid_region, gfx::Region(rc));
 }
 
+//////////////////////////////////////////////////////////////////////
 // Manager event handler.
+
 bool CustomizedGuiManager::onProcessMessage(Message* msg)
 {
+#ifdef ENABLE_STEAM
+  if (auto steamAPI = steam::SteamAPI::instance())
+    steamAPI->runCallbacks();
+#endif
+
   switch (msg->type()) {
 
-    case kCloseDisplayMessage:
-      {
-        // Execute the "Exit" command.
-        Command* command = Commands::instance()->byId(CommandId::Exit());
-        UIContext::instance()->executeCommand(command);
-      }
+    case kCloseDisplayMessage: {
+      // Execute the "Exit" command.
+      Command* command = Commands::instance()->byId(CommandId::Exit());
+      UIContext::instance()->executeCommandFromMenuOrShortcut(command);
       break;
+    }
 
     case kDropFilesMessage:
-      {
+      // Files are processed only when the main window is the current
+      // window running.
+      //
+      // TODO could we send the files to each dialog?
+      if (getForegroundWindow() == App::instance()->mainWindow()) {
         base::paths files = static_cast<DropFilesMessage*>(msg)->files();
         UIContext* ctx = UIContext::instance();
-        OpenFileCommand cmd;
+        OpenBatchOfFiles batch;
 
         while (!files.empty()) {
           auto fn = files.front();
@@ -348,16 +413,28 @@ bool CustomizedGuiManager::onProcessMessage(Message* msg)
           }
           // Load the file
           else {
-            Params params;
-            params.set("filename", fn.c_str());
-            params.set("repeat_checkbox", "true");
-            ctx->executeCommand(&cmd, params);
+            // Depending on the file type we will want to do different things:
+            std::string extension = base::string_to_lower(
+              base::get_file_extension(fn));
 
-            // Remove all used file names from the "dropped files"
-            for (const auto& usedFn : cmd.usedFiles()) {
-              auto it = std::find(files.begin(), files.end(), usedFn);
-              if (it != files.end())
-                files.erase(it);
+            // Install the extension
+            if (extension == "aseprite-extension") {
+              Command* cmd = Commands::instance()->byId(CommandId::Options());
+              Params params;
+              params.set("installExtension", fn.c_str());
+              ctx->executeCommandFromMenuOrShortcut(cmd, params);
+            }
+            // Other extensions will be handled as an image/sprite
+            else {
+              batch.open(ctx, fn,
+                         false); // Open all frames
+
+              // Remove all used file names from the "dropped files"
+              for (const auto& usedFn : batch.usedFiles()) {
+                auto it = std::find(files.begin(), files.end(), usedFn);
+                if (it != files.end())
+                  files.erase(it);
+              }
             }
           }
         }
@@ -433,7 +510,7 @@ bool CustomizedGuiManager::onProcessMessage(Message* msg)
               if (getForegroundWindow() == App::instance()->mainWindow()) {
                 // OK, so we can execute the command represented
                 // by the pressed-key in the message...
-                UIContext::instance()->executeCommand(
+                UIContext::instance()->executeCommandFromMenuOrShortcut(
                   command, key->params());
                 return true;
               }
@@ -455,7 +532,7 @@ bool CustomizedGuiManager::onProcessMessage(Message* msg)
 
     case kTimerMessage:
       if (static_cast<TimerMessage*>(msg)->timer() == defered_invalid_timer) {
-        invalidateDisplayRegion(defered_invalid_region);
+        invalidateRegion(defered_invalid_region);
         defered_invalid_region.clear();
         defered_invalid_timer->stop();
       }
@@ -482,7 +559,7 @@ bool CustomizedGuiManager::onProcessDevModeKeyDown(KeyMessage* msg)
   if (msg->ctrlPressed() &&
       msg->scancode() == kKeyF1) {
     try {
-      she::Display* display = getDisplay();
+      os::Display* display = getDisplay();
       int screenScale = display->scale();
       int uiScale = ui::guiscale();
 
@@ -538,10 +615,12 @@ bool CustomizedGuiManager::onProcessDevModeKeyDown(KeyMessage* msg)
       App::instance()->dataRecovery()->activeSession() &&
       current_editor &&
       current_editor->document()) {
-    App::instance()
+    Doc* doc = App::instance()
       ->dataRecovery()
       ->activeSession()
-      ->restoreBackupById(current_editor->document()->id());
+      ->restoreBackupById(current_editor->document()->id(), nullptr);
+    if (doc)
+      UIContext::instance()->documents().add(doc);
     return true;
   }
 #endif  // ENABLE_DATA_RECOVERY
@@ -562,6 +641,10 @@ void CustomizedGuiManager::onNewDisplayConfiguration()
 {
   Manager::onNewDisplayConfiguration();
   save_gui_config();
+
+  // TODO Should we provide a more generic way for all ui::Window to
+  //      detect the ui::Display (or UI Screen Scaling) change?
+  Console::notifyNewDisplayConfiguration();
 }
 
 std::string CustomizedGuiManager::loadLayout(Widget* widget)

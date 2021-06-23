@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2020  Igara Studio S.A.
 // Copyright (C) 2017  David Capello
 //
 // This program is distributed under the terms of
@@ -11,7 +12,7 @@
 #include "app/ui/slider2.h"
 
 #include "app/ui/skin/skin_property.h"
-#include "base/bind.h"
+#include "base/clamp.h"
 #include "ui/manager.h"
 #include "ui/message.h"
 
@@ -55,7 +56,7 @@ bool Slider2::Slider2Entry::onProcessMessage(ui::Message* msg)
             else
               ++value;
 
-            setTextf("%d", MID(minValue(), value, maxValue()));
+            setTextf("%d", base::clamp(value, minValue(), maxValue()));
             selectAllText();
 
             onChange();
@@ -95,8 +96,8 @@ Slider2::Slider2(int min, int max, int value)
   m_slider.setSizeHint(gfx::Size(128, 0));
   skin::get_skin_property(&m_entry)->setLook(skin::MiniLook);
 
-  m_slider.Change.connect(base::Bind<void>(&Slider2::onSliderChange, this));
-  m_entry.Change.connect(base::Bind<void>(&Slider2::onEntryChange, this));
+  m_slider.Change.connect([this]{ onSliderChange(); });
+  m_entry.Change.connect([this]{ onEntryChange(); });
 
   addChild(&m_slider);
   addChild(&m_entry);
@@ -118,7 +119,7 @@ void Slider2::onSliderChange()
 void Slider2::onEntryChange()
 {
   int v = m_entry.textInt();
-  v = MID(m_slider.getMinValue(), v, m_slider.getMaxValue());
+  v = base::clamp(v, m_slider.getMinValue(), m_slider.getMaxValue());
   m_slider.setValue(v);
 
   onChange();

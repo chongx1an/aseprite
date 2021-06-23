@@ -1,5 +1,6 @@
 // Aseprite Config Library
-// Copyright (c) 2014-2017 David Capello
+// Copyright (C) 2019-2020  Igara Studio S.A.
+// Copyright (C) 2014-2017  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -83,6 +84,10 @@ public:
     m_ini.Delete(section, name, true);
   }
 
+  void deleteSection(const char* section) {
+    m_ini.Delete(section, nullptr, true);
+  }
+
   void load(const std::string& filename) {
     m_filename = filename;
 
@@ -91,7 +96,8 @@ public:
       m_ini.SetMultiLine();
       SI_Error err = m_ini.LoadFile(file.get());
       if (err != SI_OK) {
-        LOG(ERROR) << "CFG: Error " << err << " loading configuration from " << m_filename << "\n";
+        LOG(ERROR, "CFG: Error %d loading configuration from %s\n",
+            (int)err, m_filename.c_str());
       }
     }
   }
@@ -101,7 +107,8 @@ public:
     if (file) {
       SI_Error err = m_ini.SaveFile(file.get());
       if (err != SI_OK) {
-        LOG(ERROR) << "CFG: Error " << err << " saving configuration into " << m_filename << "\n";
+        LOG(ERROR, "CFG: Error %d saving configuration into %s\n",
+            (int)err, m_filename.c_str());
       }
     }
   }
@@ -179,6 +186,11 @@ void CfgFile::setDoubleValue(const char* section, const char* name, double value
 void CfgFile::deleteValue(const char* section, const char* name)
 {
   m_impl->deleteValue(section, name);
+}
+
+void CfgFile::deleteSection(const char* section)
+{
+  m_impl->deleteSection(section);
 }
 
 void CfgFile::load(const std::string& filename)

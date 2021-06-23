@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2019-2020  Igara Studio S.A.
 // Copyright (C) 2017  David Capello
 //
 // This program is distributed under the terms of
@@ -12,13 +13,14 @@
 #include "app/commands/command.h"
 #include "app/commands/filters/filter_manager_impl.h"
 #include "app/commands/filters/filter_window.h"
+#include "app/commands/filters/filter_worker.h"
+#include "app/commands/new_params.h"
 #include "app/context.h"
 #include "app/ini_file.h"
 #include "app/modules/gui.h"
 #include "app/ui/color_button.h"
 #include "app/ui/color_sliders.h"
 #include "app/ui/slider2.h"
-#include "base/bind.h"
 #include "doc/image.h"
 #include "doc/mask.h"
 #include "doc/sprite.h"
@@ -30,6 +32,15 @@
 
 namespace app {
 
+struct BrightnessContrastParams : public NewParams {
+  Param<bool> ui { this, true, "ui" };
+  Param<filters::Target> channels { this, 0, "channels" };
+  Param<double> brightness { this, 0.0, "brightness" };
+  Param<double> contrast { this, 0.0, "contrast" };
+};
+
+#ifdef ENABLE_UI
+
 static const char* ConfigSection = "BrightnessContrast";
 
 class BrightnessContrastWindow : public FilterWindow {
@@ -39,16 +50,16 @@ public:
     : FilterWindow("Brightness/Contrast", ConfigSection, &filterMgr,
                    WithChannelsSelector,
                    WithoutTiledCheckBox)
-    , m_brightness(-100, 100, 0)
-    , m_contrast(-100, 100, 0)
+    , m_brightness(-100, 100, int(100.0 * filter.brightness()))
+    , m_contrast(-100, 100, int(100.0 * filter.contrast()))
     , m_filter(filter)
   {
     getContainer()->addChild(new ui::Label("Brightness:"));
     getContainer()->addChild(&m_brightness);
     getContainer()->addChild(new ui::Label("Contrast:"));
     getContainer()->addChild(&m_contrast);
-    m_brightness.Change.connect(base::Bind<void>(&BrightnessContrastWindow::onChange, this));
-    m_contrast.Change.connect(base::Bind<void>(&BrightnessContrastWindow::onChange, this));
+    m_brightness.Change.connect([this]{ onChange(); });
+    m_contrast.Change.connect([this]{ onChange(); });
   }
 
 private:
@@ -64,10 +75,11 @@ private:
   BrightnessContrastFilter& m_filter;
 };
 
-class BrightnessContrastCommand : public Command {
+#endif  // ENABLE_UI
+
+class BrightnessContrastCommand : public CommandWithNewParams<BrightnessContrastParams> {
 public:
   BrightnessContrastCommand();
-  Command* clone() const override { return new BrightnessContrastCommand(*this); }
 
 protected:
   bool onEnabled(Context* context) override;
@@ -75,7 +87,7 @@ protected:
 };
 
 BrightnessContrastCommand::BrightnessContrastCommand()
-  : Command(CommandId::BrightnessContrast(), CmdRecordableFlag)
+  : CommandWithNewParams<BrightnessContrastParams>(CommandId::BrightnessContrast(), CmdRecordableFlag)
 {
 }
 
@@ -87,6 +99,10 @@ bool BrightnessContrastCommand::onEnabled(Context* context)
 
 void BrightnessContrastCommand::onExecute(Context* context)
 {
+#ifdef ENABLE_UI
+  const bool ui = (params().ui() && context->isUIAvailable());
+#endif
+
   BrightnessContrastFilter filter;
   FilterManagerImpl filterMgr(context, &filter);
   filterMgr.setTarget(TARGET_RED_CHANNEL |
@@ -95,8 +111,20 @@ void BrightnessContrastCommand::onExecute(Context* context)
                       TARGET_GRAY_CHANNEL |
                       TARGET_ALPHA_CHANNEL);
 
-  BrightnessContrastWindow window(filter, filterMgr);
-  window.doModal();
+  if (params().channels.isSet()) filterMgr.setTarget(params().channels());
+  if (params().brightness.isSet()) filter.setBrightness(params().brightness() / 100.0);
+  if (params().contrast.isSet()) filter.setContrast(params().contrast() / 100.0);
+
+#ifdef ENABLE_UI
+  if (ui) {
+    BrightnessContrastWindow window(filter, filterMgr);
+    window.doModal();
+  }
+  else
+#endif // ENABLE_UI
+  {
+    start_filter_worker(&filterMgr);
+  }
 }
 
 Command* CommandFactory::createBrightnessContrastCommand()

@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2019  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -31,7 +32,8 @@ TEST(File, SeveralSizes)
       std::sprintf(&fn[0], "test.ase");
 
       {
-        std::unique_ptr<Doc> doc(ctx.documents().add(w, h, doc::ColorMode::INDEXED, 256));
+        std::unique_ptr<Doc> doc(
+          ctx.documents().add(w, h, doc::ColorMode::INDEXED, 256));
         doc->setFilename(&fn[0]);
 
         // Random pixels

@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2019-2020  Igara Studio S.A.
 // Copyright (C) 2001-2016  David Capello
 //
 // This program is distributed under the terms of
@@ -110,10 +111,8 @@ void CopyCel::onExecute()
       executeAndAdd(new cmd::RemoveCel(dstCel));
 
     if (srcCel) {
-      if (createLink) {
-        dstCel = Cel::createLink(srcCel);
-        dstCel->setFrame(m_dstFrame);
-      }
+      if (createLink)
+        dstCel = Cel::MakeLink(m_dstFrame, srcCel);
       else
         dstCel = create_cel_copy(srcCel, dstSprite, dstLayer, m_dstFrame);
 
@@ -126,7 +125,11 @@ void CopyCel::onFireNotifications()
 {
   CmdSequence::onFireNotifications();
 
-  ASSERT(m_srcLayer.layer());
+  // The m_srcLayer can be nullptr now because the layer from where we
+  // copied this cel might not exist anymore (e.g. if we copied the
+  // cel from another document that is already closed)
+  //ASSERT(m_srcLayer.layer());
+
   ASSERT(m_dstLayer.layer());
 
   static_cast<Doc*>(m_dstLayer.layer()->sprite()->document())

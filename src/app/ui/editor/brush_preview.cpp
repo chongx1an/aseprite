@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2019-2021  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -26,6 +27,7 @@
 #include "app/ui/editor/tool_loop_impl.h"
 #include "app/ui_context.h"
 #include "app/util/wrap_value.h"
+#include "base/scoped_value.h"
 #include "doc/algo.h"
 #include "doc/blend_internals.h"
 #include "doc/brush.h"
@@ -33,8 +35,10 @@
 #include "doc/image_impl.h"
 #include "doc/layer.h"
 #include "doc/primitives.h"
+#include "os/display.h"
+#include "os/surface.h"
+#include "os/system.h"
 #include "render/render.h"
-#include "she/display.h"
 #include "ui/manager.h"
 #include "ui/system.h"
 
@@ -44,17 +48,13 @@ using namespace doc;
 
 BrushPreview::BrushPreview(Editor* editor)
   : m_editor(editor)
-  , m_type(CROSSHAIR)
-  , m_onScreen(false)
-  , m_withModifiedPixels(false)
-  , m_withRealPreview(false)
-  , m_screenPosition(0, 0)
-  , m_editorPosition(0, 0)
 {
 }
 
 BrushPreview::~BrushPreview()
 {
+  if (m_cursor)
+    m_cursor->dispose();
 }
 
 BrushRef BrushPreview::getCurrentBrush()
@@ -119,13 +119,24 @@ void BrushPreview::show(const gfx::Point& screenPos)
   // Get the current tool
   tools::Ink* ink = m_editor->getCurrentEditorInk();
 
-  bool isFloodfill = m_editor->getCurrentEditorTool()->getPointShape(0)->isFloodFill();
+  const bool isFloodfill = m_editor->getCurrentEditorTool()->getPointShape(0)->isFloodFill();
+  const auto& dynamics = App::instance()->contextBar()->getDynamics();
 
   // Setup the cursor type depending on several factors (current tool,
   // foreground color, layer transparency, brush size, etc.).
   BrushRef brush = getCurrentBrush();
   color_t brush_color = getBrushColor(sprite, layer);
   color_t mask_index = sprite->transparentColor();
+
+  if (brush->type() != doc::kImageBrushType &&
+      (dynamics.size != tools::DynamicSensor::Static ||
+       dynamics.angle != tools::DynamicSensor::Static)) {
+    brush.reset(
+      new Brush(
+        brush->type(),
+        (dynamics.size != tools::DynamicSensor::Static ? dynamics.minSize: brush->size()),
+        (dynamics.angle != tools::DynamicSensor::Static ? dynamics.minAngle: brush->angle())));
+  }
 
   if (ink->isSelection() || ink->isSlice()) {
     m_type = SELECTION_CROSSHAIR;
@@ -137,7 +148,7 @@ void BrushPreview::show(const gfx::Point& screenPos)
      (ink->isEffect()) ||
      // or when the brush color is transparent and we are not in the background layer
      (!ink->isShading() &&
-      (layer && !layer->isBackground()) &&
+      (layer && layer->isTransparent()) &&
       ((sprite->pixelFormat() == IMAGE_INDEXED && brush_color == mask_index) ||
        (sprite->pixelFormat() == IMAGE_RGB && rgba_geta(brush_color) == 0) ||
        (sprite->pixelFormat() == IMAGE_GRAYSCALE && graya_geta(brush_color) == 0))))) {
@@ -148,6 +159,8 @@ void BrushPreview::show(const gfx::Point& screenPos)
   }
 
   bool showPreview = false;
+  bool showPreviewWithEdges = false;
+  bool cancelEdges = false;
   auto brushPreview = pref.cursor.brushPreview();
   if (!m_editor->docPref().show.brushPreview())
     brushPreview = app::gen::BrushPreview::NONE;
@@ -160,12 +173,34 @@ void BrushPreview::show(const gfx::Point& screenPos)
       m_type = BRUSH_BOUNDARIES;
       break;
     case app::gen::BrushPreview::FULL:
+    case app::gen::BrushPreview::FULLALL:
+    case app::gen::BrushPreview::FULLNEDGES:
       showPreview = m_editor->getState()->requireBrushPreview();
+      switch (brushPreview) {
+        case app::gen::BrushPreview::FULLALL:
+          if (showPreview)
+            m_type = CROSSHAIR;
+          cancelEdges = true;
+          break;
+        case app::gen::BrushPreview::FULLNEDGES:
+          if (showPreview)
+            showPreviewWithEdges = true;
+          break;
+      }
       break;
   }
 
   if (m_type & SELECTION_CROSSHAIR)
     showPreview = false;
+
+  // When the extra cel is locked (e.g. we are flashing the active
+  // layer) we don't show the brush preview temporally.
+  if (showPreview && m_editor->isExtraCelLocked()) {
+    showPreview = false;
+    showPreviewWithEdges = false;
+    cancelEdges = false;
+    m_type |= BRUSH_BOUNDARIES;
+  }
 
   // Use a simple cross
   if (pref.cursor.paintingCursorType() == gen::PaintingCursorType::SIMPLE_CROSSHAIR) {
@@ -175,9 +210,13 @@ void BrushPreview::show(const gfx::Point& screenPos)
 
   // For cursor type 'bounds' we have to generate cursor boundaries
   if (m_type & BRUSH_BOUNDARIES) {
-    showPreview = false;
-    generateBoundaries();
+    if (brush->type() != kImageBrushType)
+      showPreview = showPreviewWithEdges;
+    if (cancelEdges)
+      m_type &= ~BRUSH_BOUNDARIES;
   }
+  if (m_type & BRUSH_BOUNDARIES)
+    generateBoundaries();
 
   // Draw pixel/brush preview
   if (showPreview) {
@@ -242,17 +281,19 @@ void BrushPreview::show(const gfx::Point& screenPos)
     {
       std::unique_ptr<tools::ToolLoop> loop(
         create_tool_loop_preview(
-          m_editor, extraImage,
+          m_editor, brush, extraImage,
           extraCelBounds.origin()));
       if (loop) {
         loop->getInk()->prepareInk(loop.get());
         loop->getController()->prepareController(loop.get());
         loop->getIntertwine()->prepareIntertwine();
         loop->getPointShape()->preparePointShape(loop.get());
-        loop->getPointShape()->transformPoint(
-          loop.get(),
-          brushBounds.x-origBrushBounds.x,
-          brushBounds.y-origBrushBounds.y);
+
+        tools::Stroke::Pt pt(brushBounds.x-origBrushBounds.x,
+                             brushBounds.y-origBrushBounds.y);
+        pt.size = brush->size();
+        pt.angle = brush->angle();
+        loop->getPointShape()->transformPoint(loop.get(), pt);
       }
     }
 
@@ -269,8 +310,13 @@ void BrushPreview::show(const gfx::Point& screenPos)
     ui::ScreenGraphics g;
     ui::SetClip clip(&g);
     gfx::Color uiCursorColor = color_utils::color_for_ui(appCursorColor);
-    forEachBrushPixel(&g, m_screenPosition, spritePos, uiCursorColor, &BrushPreview::savePixelDelegate);
-    forEachBrushPixel(&g, m_screenPosition, spritePos, uiCursorColor, &BrushPreview::drawPixelDelegate);
+
+    createNativeCursor();
+    if (m_cursor)
+      forEachLittleCrossPixel(&g, m_screenPosition, uiCursorColor, &BrushPreview::putPixelInCursorDelegate);
+
+    forEachBrushPixel(&g, spritePos, uiCursorColor, &BrushPreview::savePixelDelegate);
+    forEachBrushPixel(&g, spritePos, uiCursorColor, &BrushPreview::drawPixelDelegate);
     m_withModifiedPixels = true;
   }
 
@@ -295,6 +341,12 @@ void BrushPreview::hide()
   if (!m_onScreen)
     return;
 
+  // Don't hide the cursor to avoid flickering, the native mouse
+  // cursor will be changed anyway after the hide() by the caller.
+  //
+  //if (m_cursor)
+  //  m_editor->manager()->getDisplay()->setNativeMouseCursor(os::NativeCursor::kNoCursor);
+
   // Get drawable region
   m_editor->getDrawableRegion(m_clippingRegion, ui::Widget::kCutTopWindows);
 
@@ -306,7 +358,7 @@ void BrushPreview::hide()
     // Restore pixels
     ui::ScreenGraphics g;
     ui::SetClip clip(&g);
-    forEachBrushPixel(&g, m_screenPosition, m_editorPosition, gfx::ColorNone,
+    forEachBrushPixel(&g, m_editorPosition, gfx::ColorNone,
                       &BrushPreview::clearPixelDelegate);
   }
 
@@ -328,6 +380,7 @@ void BrushPreview::hide()
   }
 
   m_onScreen = false;
+
   m_clippingRegion.clear();
   m_oldClippingRegion.clear();
 }
@@ -360,20 +413,15 @@ void BrushPreview::generateBoundaries()
 {
   BrushRef brush = getCurrentBrush();
 
-  if (m_brushBoundaries &&
+  if (!m_brushBoundaries.isEmpty() &&
       m_brushGen == brush->gen())
     return;
 
-  bool isOnePixel =
+  const bool isOnePixel =
     (m_editor->getCurrentEditorTool()->getPointShape(0)->isPixel() ||
      m_editor->getCurrentEditorTool()->getPointShape(0)->isFloodFill());
   Image* brushImage = brush->image();
-  int w = (isOnePixel ? 1: brushImage->width());
-  int h = (isOnePixel ? 1: brushImage->height());
-
   m_brushGen = brush->gen();
-  m_brushWidth = w;
-  m_brushHeight = h;
 
   Image* mask = nullptr;
   bool deleteMask = true;
@@ -387,30 +435,66 @@ void BrushPreview::generateBoundaries()
     mask = brush->maskBitmap();
   }
 
-  m_brushBoundaries.reset(
-    new MaskBoundaries(mask ? mask: brushImage));
+  m_brushBoundaries.regen(mask ? mask: brushImage);
+  if (!isOnePixel)
+    m_brushBoundaries.offset(-brush->center().x,
+                             -brush->center().y);
 
   if (deleteMask)
     delete mask;
 }
 
-void BrushPreview::forEachBrushPixel(
+void BrushPreview::createNativeCursor()
+{
+  gfx::Rect cursorBounds;
+
+  if (m_type & CROSSHAIR) {
+    cursorBounds |= gfx::Rect(-3, -3, 7, 7);
+    m_cursorCenter = -cursorBounds.origin();
+  }
+  // Special case of a cursor for one pixel
+  else if (!(m_type & NATIVE_CROSSHAIR) &&
+           m_editor->zoom().scale() >= 4.0) {
+    cursorBounds = gfx::Rect(0, 0, 1, 1);
+    m_cursorCenter = gfx::Point(0, 0);
+  }
+
+  if (m_cursor) {
+    if (m_cursor->width() != cursorBounds.w ||
+        m_cursor->height() != cursorBounds.h) {
+      m_cursor->dispose();
+      m_cursor = nullptr;
+    }
+  }
+
+  if (cursorBounds.isEmpty()) {
+    ASSERT(!m_cursor);
+    if (!(m_type & NATIVE_CROSSHAIR)) {
+      // TODO should we use ui::set_mouse_cursor()?
+      ui::set_mouse_cursor_reset_info();
+      m_editor->manager()->getDisplay()->setNativeMouseCursor(os::NativeCursor::kNoCursor);
+    }
+    return;
+  }
+
+  if (!m_cursor) {
+    m_cursor = os::instance()->createRgbaSurface(cursorBounds.w, cursorBounds.h);
+
+    // Cannot clear the cursor on each iteration because it can
+    // generate a flicker effect when zooming in the same mouse
+    // position. That's strange.
+    m_cursor->clear();
+  }
+}
+
+void BrushPreview::forEachLittleCrossPixel(
   ui::Graphics* g,
   const gfx::Point& screenPos,
-  const gfx::Point& spritePos,
   gfx::Color color,
   PixelDelegate pixelDelegate)
 {
-  m_savedPixelsIterator = 0;
-
   if (m_type & CROSSHAIR)
     traceCrossPixels(g, screenPos, color, pixelDelegate);
-
-  if (m_type & SELECTION_CROSSHAIR)
-    traceSelectionCrossPixels(g, spritePos, color, 1, pixelDelegate);
-
-  if (m_type & BRUSH_BOUNDARIES)
-    traceBrushBoundaries(g, spritePos, color, pixelDelegate);
 
   // Depending on the editor zoom, maybe we need subpixel movement (a
   // little dot inside the active pixel)
@@ -418,6 +502,39 @@ void BrushPreview::forEachBrushPixel(
       m_editor->zoom().scale() >= 4.0) {
     (this->*pixelDelegate)(g, screenPos, color);
   }
+  else {
+    // We'll remove the pixel (as we didn't called Surface::clear() to
+    // avoid a flickering issue when zooming in the same mouse
+    // position).
+    base::ScopedValue<bool> restore(m_blackAndWhiteNegative, false,
+                                    m_blackAndWhiteNegative);
+    (this->*pixelDelegate)(g, screenPos, gfx::ColorNone);
+  }
+
+  if (m_cursor) {
+    ASSERT(m_cursor);
+
+    // TODO should we use ui::set_mouse_cursor()?
+    ui::set_mouse_cursor_reset_info();
+    m_editor->manager()->getDisplay()->setNativeMouseCursor(
+      m_cursor, m_cursorCenter,
+      m_editor->manager()->getDisplay()->scale());
+  }
+}
+
+void BrushPreview::forEachBrushPixel(
+  ui::Graphics* g,
+  const gfx::Point& spritePos,
+  gfx::Color color,
+  PixelDelegate pixelDelegate)
+{
+  m_savedPixelsIterator = 0;
+
+  if (m_type & SELECTION_CROSSHAIR)
+    traceSelectionCrossPixels(g, spritePos, color, 1, pixelDelegate);
+
+  if (m_type & BRUSH_BOUNDARIES)
+    traceBrushBoundaries(g, spritePos, color, pixelDelegate);
 
   m_savedPixelsLimit = m_savedPixelsIterator;
 }
@@ -450,9 +567,7 @@ void BrushPreview::traceCrossPixels(
   }
 }
 
-//////////////////////////////////////////////////////////////////////
-// Old Thick Cross
-
+// Old thick cross (used for selection tools)
 void BrushPreview::traceSelectionCrossPixels(
   ui::Graphics* g,
   const gfx::Point& pt, gfx::Color color,
@@ -489,18 +604,13 @@ void BrushPreview::traceSelectionCrossPixels(
   }
 }
 
-//////////////////////////////////////////////////////////////////////
-// Current Brush Bounds
-
+// Current brush edges
 void BrushPreview::traceBrushBoundaries(ui::Graphics* g,
                                         gfx::Point pos,
                                         gfx::Color color,
                                         PixelDelegate pixelDelegate)
 {
-  pos.x -= m_brushWidth/2;
-  pos.y -= m_brushHeight/2;
-
-  for (const auto& seg : *m_brushBoundaries) {
+  for (const auto& seg : m_brushBoundaries) {
     gfx::Rect bounds = seg.bounds();
     bounds.offset(pos);
     bounds = m_editor->editorToScreen(bounds);
@@ -519,6 +629,33 @@ void BrushPreview::traceBrushBoundaries(ui::Graphics* g,
       for (; pt.x<bounds.x+bounds.w; ++pt.x)
         (this->*pixelDelegate)(g, pt, color);
     }
+  }
+}
+
+//////////////////////////////////////////////////////////////////////
+// Pixel delegates
+
+void BrushPreview::putPixelInCursorDelegate(ui::Graphics* g, const gfx::Point& pt, gfx::Color color)
+{
+  ASSERT(m_cursor);
+
+  if (!m_clippingRegion.contains(pt))
+    return;
+
+  if (m_blackAndWhiteNegative) {
+    color_t c = g->getPixel(pt.x, pt.y);
+    int r = gfx::getr(c);
+    int g = gfx::getg(c);
+    int b = gfx::getb(c);
+
+    m_cursor->putPixel(color_utils::blackandwhite_neg(gfx::rgba(r, g, b)),
+                       pt.x - m_screenPosition.x + m_cursorCenter.x,
+                       pt.y - m_screenPosition.y + m_cursorCenter.y);
+  }
+  else {
+    m_cursor->putPixel(color,
+                       pt.x - m_screenPosition.x + m_cursorCenter.x,
+                       pt.y - m_screenPosition.y + m_cursorCenter.y);
   }
 }
 

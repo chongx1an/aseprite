@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
@@ -61,6 +62,9 @@ namespace app {
       // Returns true if this ink moves cels
       virtual bool isCelMovement() const { return false; }
 
+      // Returns true if this ink selects layers automatically
+      virtual bool isAutoSelectLayer() const { return false; }
+
       // Returns true if this ink is used to mark slices
       virtual bool isSlice() const { return false; }
 
@@ -98,6 +102,9 @@ namespace app {
 
       // Called for each point shape.
       virtual void prepareForPointShape(ToolLoop* loop, bool firstPoint, int x, int y) { }
+      virtual void prepareVForPointShape(ToolLoop* loop, int y) { }
+      virtual void prepareUForPointShapeWholeScanline(ToolLoop* loop, int x1) { }
+      virtual void prepareUForPointShapeSlicedScanline(ToolLoop* loop, bool leftSlice, int x1) { }
 
     };
 

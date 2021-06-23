@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -24,11 +25,10 @@
 #include "app/ui/skin/skin_theme.h"
 #include "app/ui/status_bar.h"
 #include "app/ui_context.h"
-#include "base/bind.h"
 #include "fmt/format.h"
 #include "gfx/size.h"
 #include "obs/signal.h"
-#include "she/surface.h"
+#include "os/surface.h"
 #include "ui/ui.h"
 
 #include <string>
@@ -67,7 +67,7 @@ private:
 static Size getToolIconSize(Widget* widget)
 {
   SkinTheme* theme = static_cast<SkinTheme*>(widget->theme());
-  she::Surface* icon = theme->getToolIcon("configuration");
+  os::Surface* icon = theme->getToolIcon("configuration");
   if (icon)
     return Size(icon->width(), icon->height());
   else
@@ -227,10 +227,10 @@ bool ToolBar::onProcessMessage(Message* msg)
           MouseMessage* mouseMsg2 = new MouseMessage(
             kMouseDownMessage,
             mouseMsg->pointerType(),
-            mouseMsg->buttons(),
+            mouseMsg->button(),
             mouseMsg->modifiers(),
             mouseMsg->position());
-          mouseMsg2->addRecipient(strip);
+          mouseMsg2->setRecipient(strip);
           manager()->enqueueMessage(mouseMsg2);
         }
       }
@@ -264,7 +264,7 @@ bool ToolBar::onProcessMessage(Message* msg)
         invalidate();
       }
 
-      StatusBar::instance()->clearText();
+      StatusBar::instance()->showDefaultText();
       break;
 
     case kTimerMessage:
@@ -321,7 +321,7 @@ void ToolBar::onPaint(ui::PaintEvent& ev)
     theme->drawRect(g, toolrc, nw.get());
 
     // Draw the tool icon
-    she::Surface* icon = theme->getToolIcon(tool->getId().c_str());
+    os::Surface* icon = theme->getToolIcon(tool->getId().c_str());
     if (icon) {
       g->drawRgbaSurface(icon,
         toolrc.x+toolrc.w/2-icon->width()/2,
@@ -340,7 +340,7 @@ void ToolBar::onPaint(ui::PaintEvent& ev)
     (isHot ? theme->parts.toolbuttonHot().get():
              theme->parts.toolbuttonLast().get()));
 
-  she::Surface* icon = theme->getToolIcon("minieditor");
+  os::Surface* icon = theme->getToolIcon("minieditor");
   if (icon) {
     g->drawRgbaSurface(icon,
       toolrc.x+toolrc.w/2-icon->width()/2,
@@ -404,7 +404,7 @@ void ToolBar::openPopupWindow(int group_index, ToolGroup* tool_group)
 
   // In case this tool contains more than just one tool, show the popup window
   m_popupWindow = new TransparentPopupWindow(PopupWindow::ClickBehavior::CloseOnClickOutsideHotRegion);
-  m_closeConn = m_popupWindow->Close.connect(base::Bind<void, ToolBar, ToolBar>(&ToolBar::onClosePopup, this));
+  m_closeConn = m_popupWindow->Close.connect([this]{ onClosePopup(); });
   m_openedRecently = true;
 
   ToolStrip* toolstrip = new ToolStrip(tool_group, this);
@@ -659,10 +659,10 @@ bool ToolBar::ToolStrip::onProcessMessage(Message* msg)
           MouseMessage* mouseMsg2 = new MouseMessage(
             kMouseDownMessage,
             mouseMsg->pointerType(),
-            mouseMsg->buttons(),
+            mouseMsg->button(),
             mouseMsg->modifiers(),
             mouseMsg->position());
-          mouseMsg2->addRecipient(bar);
+          mouseMsg2->setRecipient(bar);
           manager()->enqueueMessage(mouseMsg2);
         }
       }
@@ -722,7 +722,7 @@ void ToolBar::ToolStrip::onPaint(PaintEvent& ev)
       theme->drawRect(g, toolrc, nw.get());
 
       // Draw the tool icon
-      she::Surface* icon = theme->getToolIcon(tool->getId().c_str());
+      os::Surface* icon = theme->getToolIcon(tool->getId().c_str());
       if (icon) {
         g->drawRgbaSurface(
           icon,

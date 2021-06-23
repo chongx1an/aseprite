@@ -8,7 +8,6 @@
 #define DOC_KEYFRAMES_H_INCLUDED
 #pragma once
 
-#include "base/disable_copying.h"
 #include "doc/frame.h"
 
 #include <vector>
@@ -66,6 +65,12 @@ namespace doc {
           else
             return nullptr;
         }
+        T* operator->() {
+          if (m_it != m_end)
+            return m_it->value();
+          else
+            return nullptr;
+        }
       private:
         iterator m_it, m_next;
         const iterator m_end;
@@ -104,6 +109,11 @@ namespace doc {
     };
 
     Keyframes() { }
+
+    Keyframes(const Keyframes& other) {
+      for (const auto& key : other.m_keys)
+        m_keys.push_back(Key(key.frame(), new T(*key.value())));
+    }
 
     void insert(const frame_t frame, T* value) {
       auto it = getIterator(frame);
@@ -183,9 +193,6 @@ namespace doc {
 
   private:
     List m_keys;
-
-    // Disable operator=
-    DISABLE_COPYING(Keyframes);
   };
 
 } // namespace doc

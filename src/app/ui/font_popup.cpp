@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -18,15 +19,14 @@
 #include "app/ui/search_entry.h"
 #include "app/ui/skin/skin_theme.h"
 #include "app/ui_context.h"
+#include "app/util/conversion_to_surface.h"
 #include "app/util/freetype_utils.h"
-#include "base/bind.h"
 #include "base/fs.h"
 #include "base/string.h"
-#include "doc/conversion_she.h"
 #include "doc/image.h"
 #include "doc/image_ref.h"
-#include "she/surface.h"
-#include "she/system.h"
+#include "os/surface.h"
+#include "os/system.h"
 #include "ui/box.h"
 #include "ui/button.h"
 #include "ui/graphics.h"
@@ -39,10 +39,12 @@
 #include "font_popup.xml.h"
 
 #ifdef _WIN32
-#include <shlobj.h>
-#include <windows.h>
+  #include <shlobj.h>
+  #include <windows.h>
+  #undef max
 #endif
 
+#include <algorithm>
 #include <map>
 
 namespace app {
@@ -69,7 +71,7 @@ private:
 
     if (m_image) {
       Graphics* g = ev.graphics();
-      she::Surface* sur = she::instance()->createRgbaSurface(m_image->width(),
+      os::Surface* sur = os::instance()->createRgbaSurface(m_image->width(),
                                                              m_image->height());
 
       convert_image_to_surface(
@@ -87,7 +89,7 @@ private:
       gfx::Size sz = ev.sizeHint();
       ev.setSizeHint(
         sz.w + 4 + m_image->width(),
-        MAX(sz.h, m_image->height()));
+        std::max(sz.h, m_image->height()));
     }
   }
 
@@ -141,11 +143,11 @@ FontPopup::FontPopup()
 
   addChild(m_popup);
 
-  m_popup->search()->Change.connect(base::Bind<void>(&FontPopup::onSearchChange, this));
-  m_popup->loadFont()->Click.connect(base::Bind<void>(&FontPopup::onLoadFont, this));
+  m_popup->search()->Change.connect([this]{ onSearchChange(); });
+  m_popup->loadFont()->Click.connect([this]{ onLoadFont(); });
   m_listBox.setFocusMagnet(true);
-  m_listBox.Change.connect(base::Bind<void>(&FontPopup::onChangeFont, this));
-  m_listBox.DoubleClickItem.connect(base::Bind<void>(&FontPopup::onLoadFont, this));
+  m_listBox.Change.connect([this]{ onChangeFont(); });
+  m_listBox.DoubleClickItem.connect([this]{ onLoadFont(); });
 
   m_popup->view()->attachToView(&m_listBox);
 

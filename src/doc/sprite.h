@@ -1,5 +1,6 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2018 David Capello
+// Copyright (C) 2018-2019  Igara Studio S.A.
+// Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -13,7 +14,7 @@
 #include "doc/cel_list.h"
 #include "doc/color.h"
 #include "doc/frame.h"
-#include "doc/frame_tags.h"
+#include "doc/image_buffer.h"
 #include "doc/image_ref.h"
 #include "doc/image_spec.h"
 #include "doc/layer_list.h"
@@ -21,6 +22,7 @@
 #include "doc/pixel_format.h"
 #include "doc/pixel_ratio.h"
 #include "doc/slices.h"
+#include "doc/tags.h"
 #include "gfx/rect.h"
 
 #include <vector>
@@ -55,11 +57,14 @@ namespace doc {
     ////////////////////////////////////////
     // Constructors/Destructor
 
-    Sprite(PixelFormat format, int width, int height, int ncolors);
-    Sprite(const ImageSpec& spec, int ncolors);
+    Sprite(const ImageSpec& spec, int ncolors = 256);
     virtual ~Sprite();
 
-    static Sprite* createBasicSprite(PixelFormat format, int width, int height, int ncolors);
+    // Creates a new sprite with one transparent layer and one cel
+    // with an image of the size of the sprite.
+    static Sprite* MakeStdSprite(const ImageSpec& spec,
+                                 const int ncolors = 256,
+                                 const ImageBufferPtr& imageBuf = ImageBufferPtr());
 
     ////////////////////////////////////////
     // Main properties
@@ -70,15 +75,21 @@ namespace doc {
     void setDocument(Document* doc) { m_document = doc; }
 
     PixelFormat pixelFormat() const { return (PixelFormat)m_spec.colorMode(); }
+    ColorMode colorMode() const { return m_spec.colorMode(); }
     const PixelRatio& pixelRatio() const { return m_pixelRatio; }
     gfx::Size size() const { return m_spec.size(); }
     gfx::Rect bounds() const { return m_spec.bounds(); }
     int width() const { return m_spec.width(); }
     int height() const { return m_spec.height(); }
+    const gfx::ColorSpacePtr& colorSpace() const { return m_spec.colorSpace(); }
 
     void setPixelFormat(PixelFormat format);
     void setPixelRatio(const PixelRatio& pixelRatio);
     void setSize(int width, int height);
+    void setColorSpace(const gfx::ColorSpacePtr& colorSpace);
+
+    // Returns true if the sprite has a background layer and it's visible
+    bool isOpaque() const;
 
     // Returns true if the rendered images will contain alpha values less
     // than 255. Only RGBA and Grayscale images without background needs
@@ -89,6 +100,12 @@ namespace doc {
     color_t transparentColor() const { return m_spec.maskColor(); }
     void setTransparentColor(color_t color);
 
+    static gfx::Rect DefaultGridBounds();
+    static void SetDefaultGridBounds(const gfx::Rect& defGridBounds);
+
+    const gfx::Rect& gridBounds() const { return m_gridBounds; }
+    void setGridBounds(const gfx::Rect& rc) { m_gridBounds = rc; }
+
     virtual int getMemSize() const override;
 
     ////////////////////////////////////////
@@ -97,6 +114,7 @@ namespace doc {
     LayerGroup* root() const { return m_root; }
     LayerImage* backgroundLayer() const;
     Layer* firstBrowsableLayer() const;
+    Layer* firstLayer() const;
     layer_t allLayersCount() const;
     bool hasVisibleReferenceLayers() const;
 
@@ -132,8 +150,8 @@ namespace doc {
     void setFrameRangeDuration(frame_t from, frame_t to, int msecs);
     void setDurationForAllFrames(int msecs);
 
-    const FrameTags& frameTags() const { return m_frameTags; }
-    FrameTags& frameTags() { return m_frameTags; }
+    const Tags& tags() const { return m_tags; }
+    Tags& tags() { return m_tags; }
 
     const Slices& slices() const { return m_slices; }
     Slices& slices() { return m_slices; }
@@ -178,11 +196,12 @@ namespace doc {
     std::vector<int> m_frlens;             // duration per frame
     PalettesList m_palettes;               // list of palettes
     LayerGroup* m_root;                    // main group of layers
+    gfx::Rect m_gridBounds;                // grid settings
 
     // Current rgb map
     mutable RgbMap* m_rgbMap;
 
-    FrameTags m_frameTags;
+    Tags m_tags;
     Slices m_slices;
 
     // Disable default constructor and copying

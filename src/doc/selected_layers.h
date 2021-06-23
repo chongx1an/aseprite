@@ -1,5 +1,6 @@
 // Aseprite Document Library
-// Copyright (c) 2016-2018 David Capello
+// Copyright (C) 2020  Igara Studio S.A.
+// Copyright (C) 2016-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -34,11 +35,12 @@ namespace doc {
 
     void clear();
     void insert(Layer* layer);
-    void erase(Layer* layer);
+    void erase(const Layer* layer);
 
-    bool contains(Layer* layer) const;
+    bool contains(const Layer* layer) const;
     bool hasSameParent() const;
-    LayerList toLayerList() const;
+    LayerList toBrowsableLayerList() const;
+    LayerList toAllLayersList() const;
 
     void removeChildrenIfParentIsSelected();
     void expandCollapsedGroups();

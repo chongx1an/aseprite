@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -19,12 +20,13 @@
 #include "app/ini_file.h"
 #include "app/modules/editors.h"
 #include "app/modules/gui.h"
-#include "app/transaction.h"
+#include "app/tx.h"
 #include "app/ui/color_bar.h"
 #include "app/ui/color_button.h"
-#include "base/bind.h"
+#include "app/ui/selection_mode_field.h"
 #include "base/chrono.h"
 #include "base/convert_to.h"
+#include "base/scoped_value.h"
 #include "doc/image.h"
 #include "doc/mask.h"
 #include "doc/sprite.h"
@@ -32,6 +34,7 @@
 #include "ui/button.h"
 #include "ui/label.h"
 #include "ui/slider.h"
+#include "ui/tooltips.h"
 #include "ui/widget.h"
 #include "ui/window.h"
 
@@ -45,20 +48,33 @@ using namespace ui;
 class MaskByColorCommand : public Command {
 public:
   MaskByColorCommand();
-  Command* clone() const override { return new MaskByColorCommand(*this); }
 
 protected:
   bool onEnabled(Context* context) override;
   void onExecute(Context* context) override;
 
 private:
-  Mask* generateMask(const Sprite* sprite, const Image* image, int xpos, int ypos);
+  Mask* generateMask(const Mask& origMask,
+                     const Sprite* sprite,
+                     const Image* image,
+                     int xpos, int ypos,
+                     gen::SelectionMode mode);
   void maskPreview(const ContextReader& reader);
 
-  Window* m_window; // TODO we cannot use a std::unique_ptr because clone() needs a copy ctor
-  ColorButton* m_buttonColor;
-  CheckBox* m_checkPreview;
-  Slider* m_sliderTolerance;
+  class SelModeField : public SelectionModeField {
+  public:
+    obs::signal<void()> ModeChange;
+  protected:
+    void onSelectionModeChange(gen::SelectionMode mode) override {
+      ModeChange();
+    }
+  };
+
+  Window* m_window = nullptr;
+  ColorButton* m_buttonColor = nullptr;
+  CheckBox* m_checkPreview = nullptr;
+  Slider* m_sliderTolerance = nullptr;
+  SelModeField* m_selMode = nullptr;
 };
 
 MaskByColorCommand::MaskByColorCommand()
@@ -75,13 +91,10 @@ bool MaskByColorCommand::onEnabled(Context* context)
 
 void MaskByColorCommand::onExecute(Context* context)
 {
+  ASSERT(!m_window);
+
   const ContextReader reader(context);
   const Sprite* sprite = reader.sprite();
-  Box* box1, *box2, *box3, *box4;
-  Widget* label_color;
-  Widget* label_tolerance;
-  Button* button_ok;
-  Button* button_cancel;
 
   if (!App::instance()->isGui() || !sprite)
     return;
@@ -91,22 +104,29 @@ void MaskByColorCommand::onExecute(Context* context)
   if (!image)
     return;
 
-  m_window = new Window(Window::WithTitleBar, "Mask by Color");
-  box1 = new Box(VERTICAL);
-  box2 = new Box(HORIZONTAL);
-  box3 = new Box(HORIZONTAL);
-  box4 = new Box(HORIZONTAL | HOMOGENEOUS);
-  label_color = new Label("Color:");
+  std::unique_ptr<Window> win(new Window(Window::WithTitleBar, "Mask by Color"));
+  base::ScopedValue<Window*> setWindow(m_window, win.get(), nullptr);
+  TooltipManager* tooltipManager = new TooltipManager();
+  m_window->addChild(tooltipManager);
+  auto box1 = new Box(VERTICAL);
+  auto box2 = new Box(HORIZONTAL);
+  auto box3 = new Box(HORIZONTAL);
+  auto box4 = new Box(HORIZONTAL | HOMOGENEOUS);
+  auto label_color = new Label("Color:");
   m_buttonColor = new ColorButton
     (get_config_color("MaskColor", "Color",
                       ColorBar::instance()->getFgColor()),
      sprite->pixelFormat(),
      ColorButtonOptions());
-  label_tolerance = new Label("Tolerance:");
+  auto label_tolerance = new Label("Tolerance:");
   m_sliderTolerance = new Slider(0, 255, get_config_int("MaskColor", "Tolerance", 0));
+
+  m_selMode = new SelModeField;
+  m_selMode->setupTooltips(tooltipManager);
+
   m_checkPreview = new CheckBox("&Preview");
-  button_ok = new Button("&OK");
-  button_cancel = new Button("&Cancel");
+  auto button_ok = new Button("&OK");
+  auto button_cancel = new Button("&Cancel");
 
   m_checkPreview->processMnemonicFromText();
   button_ok->processMnemonicFromText();
@@ -115,13 +135,13 @@ void MaskByColorCommand::onExecute(Context* context)
   if (get_config_bool("MaskColor", "Preview", true))
     m_checkPreview->setSelected(true);
 
-  button_ok->Click.connect(base::Bind<void>(&Window::closeWindow, m_window, button_ok));
-  button_cancel->Click.connect(base::Bind<void>(&Window::closeWindow, m_window, button_cancel));
+  button_ok->Click.connect([this, button_ok]{ m_window->closeWindow(button_ok); });
+  button_cancel->Click.connect([this, button_cancel]{ m_window->closeWindow(button_cancel); });
 
-
-  m_buttonColor->Change.connect(base::Bind<void>(&MaskByColorCommand::maskPreview, this, base::Ref(reader)));
-  m_sliderTolerance->Change.connect(base::Bind<void>(&MaskByColorCommand::maskPreview, this, base::Ref(reader)));
-  m_checkPreview->Click.connect(base::Bind<void>(&MaskByColorCommand::maskPreview, this, base::Ref(reader)));
+  m_buttonColor->Change.connect([&]{ maskPreview(reader); });
+  m_sliderTolerance->Change.connect([&]{ maskPreview(reader); });
+  m_checkPreview->Click.connect([&]{ maskPreview(reader); });
+  m_selMode->ModeChange.connect([&]{ maskPreview(reader); });
 
   button_ok->setFocusMagnet(true);
   m_buttonColor->setExpansive(true);
@@ -129,6 +149,7 @@ void MaskByColorCommand::onExecute(Context* context)
   box2->setExpansive(true);
 
   m_window->addChild(box1);
+  box1->addChild(m_selMode);
   box1->addChild(box2);
   box1->addChild(box3);
   box1->addChild(m_checkPreview);
@@ -159,45 +180,80 @@ void MaskByColorCommand::onExecute(Context* context)
   Doc* document(writer.document());
 
   if (apply) {
-    Transaction transaction(writer.context(), "Mask by Color", DoesntModifyDocument);
-    std::unique_ptr<Mask> mask(generateMask(sprite, image, xpos, ypos));
-    transaction.execute(new cmd::SetMask(document, mask.get()));
-    transaction.commit();
+    Tx tx(writer.context(), "Mask by Color", DoesntModifyDocument);
+    std::unique_ptr<Mask> mask(generateMask(*document->mask(),
+                                            sprite, image, xpos, ypos,
+                                            m_selMode->selectionMode()));
+    tx(new cmd::SetMask(document, mask.get()));
+    tx.commit();
 
     set_config_color("MaskColor", "Color", m_buttonColor->getColor());
     set_config_int("MaskColor", "Tolerance", m_sliderTolerance->getValue());
     set_config_bool("MaskColor", "Preview", m_checkPreview->isSelected());
   }
+  else {
+    document->generateMaskBoundaries();
+  }
 
   // Update boundaries and editors.
-  document->generateMaskBoundaries();
   update_screen_for_document(document);
 
   // Save window configuration.
   save_window_pos(m_window, "MaskColor");
-  delete m_window;
 }
 
-Mask* MaskByColorCommand::generateMask(const Sprite* sprite, const Image* image, int xpos, int ypos)
+Mask* MaskByColorCommand::generateMask(const Mask& origMask,
+                                       const Sprite* sprite,
+                                       const Image* image,
+                                       int xpos, int ypos,
+                                       gen::SelectionMode mode)
 {
-  int color, tolerance;
-
-  color = color_utils::color_for_image(m_buttonColor->getColor(), sprite->pixelFormat());
-  tolerance = m_sliderTolerance->getValue();
+  int color = color_utils::color_for_image(m_buttonColor->getColor(),
+                                           sprite->pixelFormat());
+  int tolerance = m_sliderTolerance->getValue();
 
   std::unique_ptr<Mask> mask(new Mask());
   mask->byColor(image, color, tolerance);
   mask->offsetOrigin(xpos, ypos);
+
+  if (!origMask.isEmpty()) {
+    switch (mode) {
+      case gen::SelectionMode::DEFAULT:
+        break;
+      case gen::SelectionMode::ADD:
+        mask->add(origMask);
+        break;
+      case gen::SelectionMode::SUBTRACT: {
+        if (!mask->isEmpty()) {
+          Mask mask2(origMask);
+          mask2.subtract(*mask);
+          mask->replace(mask2);
+        }
+        else {
+          mask->replace(origMask);
+        }
+        break;
+      }
+      case gen::SelectionMode::INTERSECT: {
+        mask->intersect(origMask);
+        break;
+      }
+    }
+  }
 
   return mask.release();
 }
 
 void MaskByColorCommand::maskPreview(const ContextReader& reader)
 {
-  if (m_checkPreview->isSelected()) {
+  ASSERT(m_window);
+  if (m_window && m_checkPreview->isSelected()) {
     int xpos, ypos;
     const Image* image = reader.image(&xpos, &ypos);
-    std::unique_ptr<Mask> mask(generateMask(reader.sprite(), image, xpos, ypos));
+    std::unique_ptr<Mask> mask(generateMask(*reader.document()->mask(),
+                                            reader.sprite(), image,
+                                            xpos, ypos,
+                                            m_selMode->selectionMode()));
     {
       ContextWriter writer(reader);
 

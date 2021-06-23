@@ -1,4 +1,5 @@
 // Aseprite Document IO Library
+// Copyright (c) 2018-2020 Igara Studio S.A.
 // Copyright (c) 2001-2018 David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -14,6 +15,7 @@
 #include "base/exception.h"
 #include "base/file_handle.h"
 #include "base/fs.h"
+#include "gfx/color_space.h"
 #include "dio/aseprite_common.h"
 #include "dio/decode_delegate.h"
 #include "dio/file_interface.h"
@@ -37,13 +39,29 @@ bool AsepriteDecoder::decode()
     return false;
   }
 
+  if (header.depth != 32 &&
+      header.depth != 16 &&
+      header.depth != 8) {
+    delegate()->error(
+      fmt::format("Invalid color depth {0}",
+                  header.depth));
+    return false;
+  }
+
+  if (header.width < 1 || header.height < 1) {
+    delegate()->error(
+      fmt::format("Invalid sprite size {0}x{1}",
+                  header.width, header.height));
+    return false;
+  }
+
   // Create the new sprite
   std::unique_ptr<doc::Sprite> sprite(
-    new doc::Sprite(header.depth == 32 ? doc::IMAGE_RGB:
-                    header.depth == 16 ? doc::IMAGE_GRAYSCALE:
-                                         doc::IMAGE_INDEXED,
-                    header.width,
-                    header.height,
+    new doc::Sprite(doc::ImageSpec(header.depth == 32 ? doc::ColorMode::RGB:
+                                   header.depth == 16 ? doc::ColorMode::GRAYSCALE:
+                                                        doc::ColorMode::INDEXED,
+                                   header.width,
+                                   header.height),
                     header.ncolors));
 
   // Set frames and speed
@@ -55,6 +73,10 @@ bool AsepriteDecoder::decode()
 
   // Set pixel ratio
   sprite->setPixelRatio(doc::PixelRatio(header.pixel_width, header.pixel_height));
+
+  // Set grid bounds
+  sprite->setGridBounds(gfx::Rect(header.grid_x, header.grid_y,
+                                  header.grid_width, header.grid_height));
 
   // Prepare variables for layer chunks
   doc::Layer* last_layer = sprite->root();
@@ -85,7 +107,7 @@ bool AsepriteDecoder::decode()
         sprite->setFrameDuration(frame, frame_header.duration);
 
       // Read chunks
-      for (int c=0; c<frame_header.chunks; c++) {
+      for (uint32_t c=0; c<frame_header.chunks; c++) {
         // Start chunk position
         size_t chunk_pos = f()->tell();
         delegate()->progress((float)chunk_pos / (float)header.size);
@@ -152,6 +174,11 @@ bool AsepriteDecoder::decode()
             break;
           }
 
+          case ASE_FILE_CHUNK_COLOR_PROFILE: {
+            readColorProfile(sprite.get());
+            break;
+          }
+
           case ASE_FILE_CHUNK_MASK: {
             doc::Mask* mask = readMaskChunk();
             if (mask)
@@ -165,8 +192,8 @@ bool AsepriteDecoder::decode()
             // Ignore
             break;
 
-          case ASE_FILE_CHUNK_FRAME_TAGS:
-            readFrameTagsChunk(&sprite->frameTags());
+          case ASE_FILE_CHUNK_TAGS:
+            readTagsChunk(&sprite->tags());
             break;
 
           case ASE_FILE_CHUNK_SLICES: {
@@ -186,6 +213,12 @@ bool AsepriteDecoder::decode()
             readUserDataChunk(&userData);
             if (last_object_with_user_data)
               last_object_with_user_data->setUserData(userData);
+            break;
+          }
+
+          case ASE_FILE_CHUNK_TILESET: {
+            delegate()->error(
+              "Warning: The given file contains a tileset.\nThis version of Aseprite doesn't support tilemap layers.\n");
             break;
           }
 
@@ -239,6 +272,10 @@ bool AsepriteDecoder::readHeader(AsepriteHeader* header)
   header->ncolors    = read16();
   header->pixel_width = read8();
   header->pixel_height = read8();
+  header->grid_x       = (int16_t)read16();
+  header->grid_y       = (int16_t)read16();
+  header->grid_width   = read16();
+  header->grid_height  = read16();
 
   if (header->ncolors == 0)     // 0 means 256 (old .ase files)
     header->ncolors = 256;
@@ -575,8 +612,8 @@ doc::Cel* AsepriteDecoder::readCelChunk(doc::Sprite* sprite,
 {
   // Read chunk data
   doc::layer_t layer_index = read16();
-  int x = ((short)read16());
-  int y = ((short)read16());
+  int x = ((int16_t)read16());
+  int y = ((int16_t)read16());
   int opacity = read8();
   int cel_type = read16();
   readPadding(7);
@@ -644,12 +681,10 @@ doc::Cel* AsepriteDecoder::readCelChunk(doc::Sprite* sprite,
         // different X, Y, or opacity per link, in that case we must
         // create a copy.
         if (link->x() == x && link->y() == y && link->opacity() == opacity) {
-          cel.reset(doc::Cel::createLink(link));
-          cel->setFrame(frame);
+          cel.reset(doc::Cel::MakeLink(frame, link));
         }
         else {
-          cel.reset(doc::Cel::createCopy(link));
-          cel->setFrame(frame);
+          cel.reset(doc::Cel::MakeCopy(frame, link));
           cel->setPosition(x, y);
           cel->setOpacity(opacity);
         }
@@ -730,6 +765,46 @@ void AsepriteDecoder::readCelExtraChunk(doc::Cel* cel)
   }
 }
 
+void AsepriteDecoder::readColorProfile(doc::Sprite* sprite)
+{
+  int type = read16();
+  int flags = read16();
+  fixmath::fixed gamma = read32();
+  readPadding(8);
+
+  // Without color space, like old Aseprite versions
+  gfx::ColorSpacePtr cs(nullptr);
+
+  switch (type) {
+
+    case ASE_FILE_NO_COLOR_PROFILE:
+      if (flags & ASE_COLOR_PROFILE_FLAG_GAMMA)
+        cs = gfx::ColorSpace::MakeSRGBWithGamma(fixmath::fixtof(gamma));
+      else
+        cs = gfx::ColorSpace::MakeNone();
+      break;
+
+    case ASE_FILE_SRGB_COLOR_PROFILE:
+      if (flags & ASE_COLOR_PROFILE_FLAG_GAMMA)
+        cs = gfx::ColorSpace::MakeSRGBWithGamma(fixmath::fixtof(gamma));
+      else
+        cs = gfx::ColorSpace::MakeSRGB();
+      break;
+
+    case ASE_FILE_ICC_COLOR_PROFILE: {
+      size_t length = read32();
+      if (length > 0) {
+        std::vector<uint8_t> data(length);
+        readBytes(&data[0], length);
+        cs = gfx::ColorSpace::MakeICC(std::move(data));
+      }
+      break;
+    }
+  }
+
+  sprite->setColorSpace(cs);
+}
+
 doc::Mask* AsepriteDecoder::readMaskChunk()
 {
   int c, u, v, byte;
@@ -758,14 +833,14 @@ doc::Mask* AsepriteDecoder::readMaskChunk()
   return mask;
 }
 
-void AsepriteDecoder::readFrameTagsChunk(doc::FrameTags* frameTags)
+void AsepriteDecoder::readTagsChunk(doc::Tags* tags)
 {
-  size_t tags = read16();
+  size_t ntags = read16();
 
   read32();                     // 8 reserved bytes
   read32();
 
-  for (size_t c=0; c<tags; ++c) {
+  for (size_t c=0; c<ntags; ++c) {
     doc::frame_t from = read16();
     doc::frame_t to = read16();
     int aniDir = read8();
@@ -785,11 +860,11 @@ void AsepriteDecoder::readFrameTagsChunk(doc::FrameTags* frameTags)
 
     std::string name = readString();
 
-    doc::FrameTag* tag = new doc::FrameTag(from, to);
+    auto tag = new doc::Tag(from, to);
     tag->setColor(doc::rgba(r, g, b, 255));
     tag->setName(name);
     tag->setAniDir((doc::AniDir)aniDir);
-    frameTags->add(tag);
+    tags->add(tag);
   }
 }
 

@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2016  David Capello
 //
 // This program is distributed under the terms of
@@ -10,6 +11,7 @@
 
 #include "app/tools/active_tool.h"
 
+#include "app/color.h"
 #include "app/pref/preferences.h"
 #include "app/tools/active_tool_observer.h"
 #include "app/tools/ink.h"
@@ -75,24 +77,34 @@ Ink* ActiveToolManager::activeInk() const
   Tool* tool = activeTool();
   Ink* ink = tool->getInk(m_rightClick ? 1: 0);
   if (ink->isPaint() && !ink->isEffect()) {
-    tools::InkType inkType = Preferences::instance().tool(tool).ink();
+    const tools::InkType inkType = Preferences::instance().tool(tool).ink();
+    app::Color color;
+#ifdef ENABLE_UI
+    ColorBar* colorbar = ColorBar::instance();
+    color = (m_rightClick ? colorbar->getBgColor():
+                            colorbar->getFgColor());
+#endif
+    ink = adjustToolInkDependingOnSelectedInkType(ink, inkType, color);
+  }
+
+  return ink;
+}
+
+Ink* ActiveToolManager::adjustToolInkDependingOnSelectedInkType(
+  Ink* ink,
+  const InkType inkType,
+  const app::Color& color) const
+{
+  if (ink->isPaint() && !ink->isEffect()) {
     const char* id = nullptr;
-
     switch (inkType) {
-
-      case tools::InkType::SIMPLE: {
+      case tools::InkType::SIMPLE:
         id = tools::WellKnownInks::Paint;
-
-        ColorBar* colorbar = ColorBar::instance();
-        app::Color color = (m_rightClick ? colorbar->getBgColor():
-                                           colorbar->getFgColor());
         if (color.getAlpha() == 0)
           id = tools::WellKnownInks::PaintCopy;
         break;
-      }
-
       case tools::InkType::ALPHA_COMPOSITING:
-        id = tools::WellKnownInks::Paint;
+        id = tools::WellKnownInks::PaintAlphaCompositing;
         break;
       case tools::InkType::COPY_COLOR:
         id = tools::WellKnownInks::PaintCopy;
@@ -104,11 +116,9 @@ Ink* ActiveToolManager::activeInk() const
         id = tools::WellKnownInks::Shading;
         break;
     }
-
     if (id)
       ink = m_toolbox->getInkById(id);
   }
-
   return ink;
 }
 
@@ -184,6 +194,10 @@ void ActiveToolManager::pressButton(const Pointer& pointer)
         case app::gen::RightClickMode::LASSO:
           tool = m_toolbox->getToolById(WellKnownTools::Lasso);
           ink = m_toolbox->getInkById(tools::WellKnownInks::Selection);
+          break;
+        case app::gen::RightClickMode::SELECT_LAYER_AND_MOVE:
+          tool = m_toolbox->getToolById(WellKnownTools::Move);
+          ink = m_toolbox->getInkById(tools::WellKnownInks::SelectLayerAndMove);
           break;
       }
     }

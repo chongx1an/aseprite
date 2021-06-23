@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -8,12 +9,13 @@
 #include "config.h"
 #endif
 
+#include "app/app.h"
+#include "app/color_spaces.h"
 #include "app/color_utils.h"
 #include "app/modules/gfx.h"
 #include "app/ui/color_sliders.h"
 #include "app/ui/skin/skin_slider_property.h"
 #include "app/ui/skin/skin_theme.h"
-#include "base/bind.h"
 #include "base/scoped_value.h"
 #include "gfx/hsl.h"
 #include "gfx/rgb.h"
@@ -26,6 +28,7 @@
 #include "ui/slider.h"
 #include "ui/theme.h"
 
+#include <algorithm>
 #include <limits>
 
 namespace app {
@@ -55,8 +58,11 @@ namespace {
         return;
       }
 
+      // Color space conversion
+      auto convertColor = convert_from_current_to_screen_color_space();
+
       gfx::Color color = gfx::ColorNone;
-      int w = MAX(rc.w-1, 1);
+      int w = std::max(rc.w-1, 1);
 
       for (int x=0; x <= w; ++x) {
         switch (m_channel) {
@@ -113,7 +119,7 @@ namespace {
               app::Color::fromGray(255 * x / w));
             break;
         }
-        g->drawVLine(color, rc.x+x, rc.y, rc.h);
+        g->drawVLine(convertColor(color), rc.x+x, rc.y, rc.h);
       }
     }
 
@@ -179,7 +185,7 @@ namespace {
                 else
                   ++value;
 
-                setTextf("%d", MID(minValue(), value, maxValue()));
+                setTextf("%d", base::clamp(value, minValue(), maxValue()));
                 selectAllText();
 
                 onChange();
@@ -251,6 +257,9 @@ ColorSliders::ColorSliders()
   addSlider(Channel::HslLightness,  "L", 0, 100, -100, 100);
   addSlider(Channel::Gray,          "V", 0, 255, -100, 100);
   addSlider(Channel::Alpha,         "A", 0, 255, -100, 100);
+
+  m_appConn = App::instance()
+    ->ColorSpaceChange.connect([this]{ invalidate(); });
 }
 
 void ColorSliders::setColor(const app::Color& color)
@@ -361,13 +370,13 @@ void ColorSliders::addSlider(const Channel channel,
 
   item.relSlider->setSizeHint(gfx::Size(128, 0));
   item.absSlider->setSizeHint(gfx::Size(128, 0));
-  item.absSlider->setProperty(SkinSliderPropertyPtr(new SkinSliderProperty(new ColorSliderBgPainter(channel))));
+  item.absSlider->setProperty(std::make_shared<SkinSliderProperty>(new ColorSliderBgPainter(channel)));
   item.absSlider->setDoubleBuffered(true);
   get_skin_property(item.entry)->setLook(MiniLook);
 
-  item.absSlider->Change.connect(base::Bind<void>(&ColorSliders::onSliderChange, this, channel));
-  item.relSlider->Change.connect(base::Bind<void>(&ColorSliders::onSliderChange, this, channel));
-  item.entry->Change.connect(base::Bind<void>(&ColorSliders::onEntryChange, this, channel));
+  item.absSlider->Change.connect([this, channel]{ onSliderChange(channel); });
+  item.relSlider->Change.connect([this, channel]{ onSliderChange(channel); });
+  item.entry->Change.connect([this, channel]{ onEntryChange(channel); });
 
   item.box->addChild(item.absSlider);
   item.box->addChild(item.relSlider);
@@ -450,7 +459,7 @@ void ColorSliders::onEntryChange(const Channel i)
   Slider* slider = (m_mode == Mode::Absolute ?
                     m_items[i].absSlider:
                     m_items[i].relSlider);
-  value = MID(slider->getMinValue(), value, slider->getMaxValue());
+  value = base::clamp(value, slider->getMinValue(), slider->getMaxValue());
   slider->setValue(value);
 
   onControlChange(i);
@@ -489,7 +498,8 @@ void ColorSliders::updateSlidersBgColor()
 
 void ColorSliders::updateSliderBgColor(Slider* slider, const app::Color& color)
 {
-  SkinSliderPropertyPtr sliderProperty(slider->getProperty(SkinSliderProperty::Name));
+  auto sliderProperty = std::static_pointer_cast<SkinSliderProperty>(
+    slider->getProperty(SkinSliderProperty::Name));
 
   static_cast<ColorSliderBgPainter*>(sliderProperty->getBgPainter())->setColor(color);
 

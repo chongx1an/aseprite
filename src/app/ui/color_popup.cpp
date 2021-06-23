@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -27,7 +28,6 @@
 #include "app/ui/palette_view.h"
 #include "app/ui/skin/skin_theme.h"
 #include "app/ui_context.h"
-#include "base/bind.h"
 #include "base/scoped_value.h"
 #include "doc/image_impl.h"
 #include "doc/palette.h"
@@ -123,15 +123,6 @@ public:
 ColorPopup::CustomButtonSet::CustomButtonSet()
   : ButtonSet(COLOR_MODES)
 {
-}
-
-int ColorPopup::CustomButtonSet::countSelectedItems()
-{
-  int count = 0;
-  for (int i=0; i<COLOR_MODES; ++i)
-    if (getItem(i)->isSelected())
-      ++count;
-  return count;
 }
 
 void ColorPopup::CustomButtonSet::onSelectItem(Item* item, bool focusItem, ui::Message* msg)
@@ -259,7 +250,7 @@ ColorPopup::ColorPopup(const ColorButtonOptions& options)
   m_vbox.addChild(&m_maskLabel);
   addChild(&m_vbox);
 
-  m_colorType.ItemChange.connect(base::Bind<void>(&ColorPopup::onColorTypeClick, this));
+  m_colorType.ItemChange.connect([this]{ onColorTypeClick(); });
 
   m_sliders.ColorChange.connect(&ColorPopup::onColorSlidersChange, this);
   m_hexColorEntry.ColorChange.connect(&ColorPopup::onColorHexEntryChange, this);
@@ -379,7 +370,7 @@ void ColorPopup::onMakeFixed()
   }
 }
 
-void ColorPopup::onPaletteViewIndexChange(int index, ui::MouseButtons buttons)
+void ColorPopup::onPaletteViewIndexChange(int index, ui::MouseButton button)
 {
   base::ScopedValue<bool> restore(m_insideChange, true,
                                   m_insideChange);
@@ -416,7 +407,7 @@ void ColorPopup::onColorHexEntryChange(const app::Color& color)
     m_disableHexUpdate = false;
 }
 
-void ColorPopup::onSelectOldColor()
+void ColorPopup::onSelectOldColor(ColorShades::ClickEvent&)
 {
   Shade shade = m_oldAndNew.getShade();
   int hot = m_oldAndNew.getHotEntry();

@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -19,12 +20,11 @@
 #include "app/doc.h"
 #include "app/doc_event.h"
 #include "app/modules/gui.h"
-#include "app/transaction.h"
+#include "app/tx.h"
 #include "app/ui/separator_in_view.h"
 #include "app/ui/timeline/timeline.h"
 #include "app/ui/user_data_popup.h"
 #include "app/ui_context.h"
-#include "base/bind.h"
 #include "base/scoped_value.h"
 #include "doc/image.h"
 #include "doc/layer.h"
@@ -41,7 +41,6 @@ using namespace ui;
 class LayerPropertiesCommand : public Command {
 public:
   LayerPropertiesCommand();
-  Command* clone() const override { return new LayerPropertiesCommand(*this); }
 
 protected:
   bool onEnabled(Context* context) override;
@@ -100,11 +99,11 @@ public:
     mode()->addItem(new BlendModeItem("Color", doc::BlendMode::HSL_COLOR));
     mode()->addItem(new BlendModeItem("Luminosity", doc::BlendMode::HSL_LUMINOSITY));
 
-    name()->Change.connect(base::Bind<void>(&LayerPropertiesWindow::onStartTimer, this));
-    mode()->Change.connect(base::Bind<void>(&LayerPropertiesWindow::onStartTimer, this));
-    opacity()->Change.connect(base::Bind<void>(&LayerPropertiesWindow::onStartTimer, this));
-    m_timer.Tick.connect(base::Bind<void>(&LayerPropertiesWindow::onCommitChange, this));
-    userData()->Click.connect(base::Bind<void>(&LayerPropertiesWindow::onPopupUserData, this));
+    name()->Change.connect([this]{ onStartTimer(); });
+    mode()->Change.connect([this]{ onStartTimer(); });
+    opacity()->Change.connect([this]{ onStartTimer(); });
+    m_timer.Tick.connect([this]{ onCommitChange(); });
+    userData()->Click.connect([this]{ onPopupUserData(); });
 
     remapWindow();
     centerWindow();
@@ -223,7 +222,7 @@ private:
                                      newBlendMode != static_cast<LayerImage*>(m_layer)->blendMode()))))) {
       try {
         ContextWriter writer(UIContext::instance());
-        Transaction transaction(writer.context(), "Set Layer Properties");
+        Tx tx(writer.context(), "Set Layer Properties");
 
         DocRange range;
         if (m_range.enabled())
@@ -240,17 +239,17 @@ private:
 
         for (Layer* layer : range.selectedLayers()) {
           if (nameChanged && newName != layer->name())
-            transaction.execute(new cmd::SetLayerName(layer, newName));
+            tx(new cmd::SetLayerName(layer, newName));
 
           if (userDataChanged && m_userData != layer->userData())
-            transaction.execute(new cmd::SetUserData(layer, m_userData));
+            tx(new cmd::SetUserData(layer, m_userData));
 
           if (layer->isImage()) {
             if (opacityChanged && newOpacity != static_cast<LayerImage*>(layer)->opacity())
-              transaction.execute(new cmd::SetLayerOpacity(static_cast<LayerImage*>(layer), newOpacity));
+              tx(new cmd::SetLayerOpacity(static_cast<LayerImage*>(layer), newOpacity));
 
             if (blendModeChanged && newBlendMode != static_cast<LayerImage*>(layer)->blendMode())
-              transaction.execute(new cmd::SetLayerBlendMode(static_cast<LayerImage*>(layer), newBlendMode));
+              tx(new cmd::SetLayerBlendMode(static_cast<LayerImage*>(layer), newBlendMode));
           }
         }
 
@@ -258,7 +257,7 @@ private:
         // might have changed.
         App::instance()->timeline()->invalidate();
 
-        transaction.commit();
+        tx.commit();
       }
       catch (const std::exception& e) {
         Console::showException(e);

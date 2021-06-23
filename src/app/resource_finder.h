@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2019-2021  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -11,6 +12,7 @@
 #include "base/disable_copying.h"
 #include "base/paths.h"
 
+#include <atomic>
 #include <string>
 
 namespace app {
@@ -40,8 +42,17 @@ namespace app {
     void includeDataDir(const char* filename);
     void includeHomeDir(const char* filename);
 
+#if !defined(_WIN32) && !defined(__APPLE__)
+    // For Linux: It's $XDG_CONFIG_HOME or $HOME/.config
+    void includeHomeConfigDir(const char* filename);
+#endif
+
     // Tries to add the given filename in these locations:
     // For Windows:
+    // - If ASEPRITE_USER_FOLDER environment variable is defined, it
+    //   should point the folder where the "user dir" is (it's useful
+    //   for testing purposes to test with an empty preferences
+    //   folder)
     // - If the app is running in portable mode, the filename
     //   will be in the same location as the .exe file.
     // - If the app is installed, the filename will be inside
@@ -59,7 +70,7 @@ namespace app {
   private:
     bool m_log;
     base::paths m_paths;
-    int m_current;
+    std::atomic<int> m_current;
     std::string m_default;
 
     DISABLE_COPYING(ResourceFinder);

@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2019-2021  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -20,7 +21,7 @@
 #include "app/modules/gui.h"
 #include "app/sprite_job.h"
 #include "app/tools/tool_box.h"
-#include "app/transaction.h"
+#include "app/tx.h"
 #include "app/ui/color_bar.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/status_bar.h"
@@ -79,7 +80,7 @@ protected:
 
   // [working thread]
   void onJob() override {
-    DocApi api = document()->getApi(transaction());
+    DocApi api = document()->getApi(tx());
 
     // 1) Rotate cel positions
     for (Cel* cel : m_cels) {
@@ -91,7 +92,7 @@ protected:
         gfx::RectF bounds = cel->boundsF();
         rotate_rect(bounds);
         if (cel->boundsF() != bounds)
-          transaction().execute(new cmd::SetCelBoundsF(cel, bounds));
+          tx()(new cmd::SetCelBoundsF(cel, bounds));
       }
       else {
         gfx::Rect bounds = cel->bounds();
@@ -120,7 +121,7 @@ protected:
 
       // cancel all the operation?
       if (isCanceled())
-        return;        // Transaction destructor will undo all operations
+        return;        // Tx destructor will undo all operations
     }
 
     // rotate mask
@@ -154,10 +155,6 @@ protected:
 
       // Copy new mask
       api.copyToCurrentMask(new_mask.get());
-
-      // Regenerate mask
-      document()->resetTransformation();
-      document()->generateMaskBoundaries();
     }
 
     // change the sprite's size
@@ -202,30 +199,31 @@ void RotateCommand::onExecute(Context* context)
 
     // Flip the mask or current cel
     if (m_flipMask) {
+      // If we want to rotate the visible mask, we can go to
+      // MovingPixelsState (even when the range is enabled, because
+      // now PixelsMovement support ranges).
+      if (site.document()->isMaskVisible()) {
+        // Select marquee tool
+        if (tools::Tool* tool = App::instance()->toolBox()
+            ->getToolById(tools::WellKnownTools::RectangularMarquee)) {
+          ToolBar::instance()->selectTool(tool);
+          current_editor->startSelectionTransformation(gfx::Point(0, 0), m_angle);
+          return;
+        }
+      }
+
       auto range = App::instance()->timeline()->range();
       if (range.enabled())
-        cels = get_unlocked_unique_cels(site.sprite(), range);
+        cels = get_unique_cels_to_edit_pixels(site.sprite(), range);
       else if (site.cel() &&
                site.layer() &&
-               site.layer()->isEditable()) {
-        // If we want to rotate the visible mask for the current cel,
-        // we can go to MovingPixelsState.
-        if (site.document()->isMaskVisible()) {
-          // Select marquee tool
-          if (tools::Tool* tool = App::instance()->toolBox()
-              ->getToolById(tools::WellKnownTools::RectangularMarquee)) {
-            ToolBar::instance()->selectTool(tool);
-            current_editor->startSelectionTransformation(gfx::Point(0, 0), m_angle);
-            return;
-          }
-        }
-
+               site.layer()->canEditPixels()) {
         cels.push_back(site.cel());
       }
 
       if (cels.empty()) {
         StatusBar::instance()->showTip(
-          1000, Strings::statusbar_tips_all_layers_are_locked().c_str());
+          1000, Strings::statusbar_tips_all_layers_are_locked());
         return;
       }
     }
@@ -243,7 +241,6 @@ void RotateCommand::onExecute(Context* context)
       job.startJob();
       job.waitJob();
     }
-    reader.document()->generateMaskBoundaries();
     update_screen_for_document(reader.document());
   }
 }

@@ -1,4 +1,5 @@
 // Aseprite UI Library
+// Copyright (C) 2018-2021  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -10,11 +11,13 @@
 
 #include "ui/menu.h"
 
+#include "base/clamp.h"
 #include "gfx/size.h"
-#include "she/font.h"
+#include "os/font.h"
 #include "ui/intern.h"
 #include "ui/ui.h"
 
+#include <algorithm>
 #include <cctype>
 #include <memory>
 
@@ -96,13 +99,64 @@ static MenuItem* check_for_letter(Menu* menu, const KeyMessage* keymsg);
 static MenuItem* find_nextitem(Menu* menu, MenuItem* menuitem);
 static MenuItem* find_previtem(Menu* menu, MenuItem* menuitem);
 
+static void add_scrollbars_if_needed(Window* window)
+{
+  const gfx::Rect rc0 = window->bounds();
+  gfx::Rect rc = rc0;
+
+  if (rc.x < 0) {
+    rc.w += rc.x;
+    rc.x = 0;
+  }
+  if (rc.x2() > ui::display_w()) {
+    rc.w = ui::display_w() - rc.x;
+  }
+
+  bool vscrollbarsAdded = false;
+  if (rc.y < 0) {
+    rc.h += rc.y;
+    rc.y = 0;
+    vscrollbarsAdded = true;
+  }
+  if (rc.y2() > ui::display_h()) {
+    rc.h = ui::display_h() - rc.y;
+    vscrollbarsAdded = true;
+  }
+
+  if (rc == rc0)
+    return;
+
+  Widget* menubox = window->firstChild();
+  View* view = new View;
+  view->InitTheme.connect([view]{ view->noBorderNoChildSpacing(); });
+  view->initTheme();
+
+  if (vscrollbarsAdded) {
+    rc.w += 2*view->verticalBar()->getBarWidth();
+    if (rc.x2() > ui::display_w()) {
+      rc.x = ui::display_w() - rc.w;
+      if (rc.x < 0) {
+        rc.x = 0;
+        rc.w = ui::display_w();
+      }
+    }
+  }
+
+  window->setBounds(rc);
+
+  window->removeChild(menubox);
+  view->attachToView(menubox);
+  window->addChild(view);
+}
+
 //////////////////////////////////////////////////////////////////////
 // Menu
 
 Menu::Menu()
   : Widget(kMenuWidget)
-  , m_menuitem(NULL)
+  , m_menuitem(nullptr)
 {
+  enableFlags(IGNORE_MOUSE);
   initTheme();
 }
 
@@ -110,10 +164,10 @@ Menu::~Menu()
 {
   if (m_menuitem) {
     if (m_menuitem->getSubmenu() == this) {
-      m_menuitem->setSubmenu(NULL);
+      m_menuitem->setSubmenu(nullptr);
     }
     else {
-      ASSERT(m_menuitem->getSubmenu() == NULL);
+      ASSERT(m_menuitem->getSubmenu() == nullptr);
     }
   }
 }
@@ -123,7 +177,7 @@ Menu::~Menu()
 
 MenuBox::MenuBox(WidgetType type)
  : Widget(type)
- , m_base(NULL)
+ , m_base(nullptr)
 {
   this->setFocusStop(true);
   initTheme();
@@ -132,7 +186,6 @@ MenuBox::MenuBox(WidgetType type)
 MenuBox::~MenuBox()
 {
   stopFilteringMouseDown();
-  delete m_base;
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -165,8 +218,8 @@ MenuItem::MenuItem(const std::string& text)
   : Widget(kMenuItemWidget)
 {
   m_highlighted = false;
-  m_submenu = NULL;
-  m_submenu_menubox = NULL;
+  m_submenu = nullptr;
+  m_submenu_menubox = nullptr;
 
   setText(text);
   initTheme();
@@ -187,9 +240,8 @@ Menu* MenuBox::getMenu()
 
 MenuBaseData* MenuBox::createBase()
 {
-  delete m_base;
-  m_base = new MenuBaseData;
-  return m_base;
+  m_base.reset(new MenuBaseData);
+  return m_base.get();
 }
 
 Menu* MenuItem::getSubmenu()
@@ -211,7 +263,7 @@ void MenuBox::setMenu(Menu* menu)
 void MenuItem::setSubmenu(Menu* menu)
 {
   if (m_submenu)
-    m_submenu->setOwnerMenuItem(NULL);
+    m_submenu->setOwnerMenuItem(nullptr);
 
   m_submenu = menu;
 
@@ -267,8 +319,10 @@ void Menu::showPopup(const gfx::Point& pos)
 
   // Menubox position
   window->positionWindow(
-    MID(0, pos.x, ui::display_w() - window->bounds().w),
-    MID(0, pos.y, ui::display_h() - window->bounds().h));
+    base::clamp(pos.x, 0, ui::display_w() - window->bounds().w),
+    base::clamp(pos.y, 0, ui::display_h() - window->bounds().h));
+
+  add_scrollbars_if_needed(window.get());
 
   // Set the focus to the new menubox
   Manager* manager = Manager::getDefault();
@@ -288,7 +342,23 @@ void Menu::showPopup(const gfx::Point& pos)
   // Fetch the "menu" so it isn't destroyed
   menubox->setMenu(nullptr);
   menubox->stopFilteringMouseDown();
+}
 
+Widget* Menu::findItemById(const char* id)
+{
+  Widget* result = findChild(id);
+  if (result)
+    return result;
+  for (auto child : children()) {
+    if (child->type() == kMenuItemWidget) {
+      if (Menu* submenu = static_cast<MenuItem*>(child)->getSubmenu()) {
+        result = submenu->findItemById(id);
+        if (result)
+          return result;
+      }
+    }
+  }
+  return nullptr;
 }
 
 void Menu::onPaint(PaintEvent& ev)
@@ -325,18 +395,25 @@ void Menu::onSizeHint(SizeHintEvent& ev)
   Size size(0, 0);
   Size reqSize;
 
-  UI_FOREACH_WIDGET_WITH_END(children(), it, end) {
+  for (auto it=children().begin(),
+         end=children().end();
+         it!=end; ) {
+    auto next = it;
+    ++next;
+
     reqSize = (*it)->sizeHint();
 
     if (parent() &&
         parent()->type() == kMenuBarWidget) {
-      size.w += reqSize.w + ((it+1 != end) ? childSpacing(): 0);
-      size.h = MAX(size.h, reqSize.h);
+      size.w += reqSize.w + ((next != end) ? childSpacing(): 0);
+      size.h = std::max(size.h, reqSize.h);
     }
     else {
-      size.w = MAX(size.w, reqSize.w);
-      size.h += reqSize.h + ((it+1 != end) ? childSpacing(): 0);
+      size.w = std::max(size.w, reqSize.w);
+      size.h += reqSize.h + ((next != end) ? childSpacing(): 0);
     }
+
+    it = next;
   }
 
   size.w += border().width();
@@ -351,18 +428,29 @@ bool MenuBox::onProcessMessage(Message* msg)
 
   switch (msg->type()) {
 
-    case kMouseMoveMessage:
-      if (!get_base(this)->was_clicked)
+    case kMouseMoveMessage: {
+      MenuBaseData* base = get_base(this);
+      ASSERT(base);
+      if (!base)
         break;
 
-      // Fall through
+      if (!base->was_clicked)
+        break;
+
+      //[[fallthrough]];
+    }
 
     case kMouseDownMessage:
     case kDoubleClickMessage:
       if (menu) {
         ASSERT(menu->parent() == this);
 
-        if (get_base(this)->is_processing)
+        MenuBaseData* base = get_base(this);
+        ASSERT(base);
+        if (!base)
+          break;
+
+        if (base->is_processing)
           break;
 
         gfx::Point mousePos = static_cast<MouseMessage*>(msg)->position();
@@ -370,13 +458,13 @@ bool MenuBox::onProcessMessage(Message* msg)
         // Here we catch the filtered messages (menu-bar or the
         // popuped menu-box) to detect if the user press outside of
         // the widget
-        if (msg->type() == kMouseDownMessage && m_base != NULL) {
+        if (msg->type() == kMouseDownMessage && m_base != nullptr) {
           Widget* picked = manager()->pick(mousePos);
 
           // If one of these conditions are accomplished we have to
           // close all menus (back to menu-bar or close the popuped
           // menubox), this is the place where we control if...
-          if (picked == NULL ||         // If the button was clicked nowhere
+          if (picked == nullptr ||         // If the button was clicked nowhere
               picked == this ||         // If the button was clicked in this menubox
               // The picked widget isn't from the same tree of menus
               (get_base_menubox(picked) != this ||
@@ -421,11 +509,11 @@ bool MenuBox::onProcessMessage(Message* msg)
 
                 // Set this flag to false so the submenu is not open
                 // again on kMouseMoveMessage.
-                get_base(this)->was_clicked = false;
+                base->was_clicked = false;
               }
             }
           }
-          else if (!get_base(this)->was_clicked) {
+          else if (!base->was_clicked) {
             menu->unhighlightItem();
           }
         }
@@ -434,7 +522,12 @@ bool MenuBox::onProcessMessage(Message* msg)
 
     case kMouseLeaveMessage:
       if (menu) {
-        if (get_base(this)->is_processing)
+        MenuBaseData* base = get_base(this);
+        ASSERT(base);
+        if (!base)
+          break;
+
+        if (base->is_processing)
           break;
 
         MenuItem* highlight = menu->getHighlightedItem();
@@ -445,14 +538,19 @@ bool MenuBox::onProcessMessage(Message* msg)
 
     case kMouseUpMessage:
       if (menu) {
-        if (get_base(this)->is_processing)
+        MenuBaseData* base = get_base(this);
+        ASSERT(base);
+        if (!base)
+          break;
+
+        if (base->is_processing)
           break;
 
         // The item is highlighted and not opened (and the timer to open the submenu is stopped)
         MenuItem* highlight = menu->getHighlightedItem();
         if (highlight &&
             !highlight->hasSubmenuOpened() &&
-            highlight->m_submenu_timer == NULL) {
+            highlight->m_submenu_timer == nullptr) {
           menu->closeAll();
           highlight->executeClick();
         }
@@ -463,10 +561,15 @@ bool MenuBox::onProcessMessage(Message* msg)
       if (menu) {
         MenuItem* selected;
 
-        if (get_base(this)->is_processing)
+        MenuBaseData* base = get_base(this);
+        ASSERT(base);
+        if (!base)
           break;
 
-        get_base(this)->was_clicked = false;
+        if (base->is_processing)
+          break;
+
+        base->was_clicked = false;
 
         // Check for ALT+some underlined letter
         if (((this->type() == kMenuBoxWidget) && (msg->modifiers() == kKeyNoneModifier || // <-- Inside menu-boxes we can use letters without Alt modifier pressed
@@ -483,7 +586,7 @@ bool MenuBox::onProcessMessage(Message* msg)
         // Highlight movement with keyboard
         if (this->hasFocus()) {
           MenuItem* highlight = menu->getHighlightedItem();
-          MenuItem* child_with_submenu_opened = NULL;
+          MenuItem* child_with_submenu_opened = nullptr;
           bool used = false;
 
           // Search a child with highlight or the submenu opened
@@ -603,6 +706,9 @@ bool MenuBox::onProcessMessage(Message* msg)
                 else if (menu->m_menuitem) {
                   // Get the root menu
                   MenuBox* root = get_base_menubox(this);
+                  ASSERT(root);
+                  if (!root)
+                    break;
                   menu = root->getMenu();
 
                   // Go to the next item in the root
@@ -634,6 +740,22 @@ bool MenuBox::onProcessMessage(Message* msg)
         }
       }
       break;
+
+    case kMouseWheelMessage: {
+      View* view = View::getView(this);
+      if (view) {
+        auto mouseMsg = static_cast<MouseMessage*>(msg);
+        gfx::Point scroll = view->viewScroll();
+
+        if (mouseMsg->preciseWheel())
+          scroll += mouseMsg->wheelDelta();
+        else
+          scroll += mouseMsg->wheelDelta() * textHeight()*3;
+
+        view->setViewScroll(scroll);
+      }
+      break;
+    }
 
     default:
       if (msg->type() == kClosePopupMessage) {
@@ -708,9 +830,12 @@ bool MenuItem::onProcessMessage(Message* msg)
         validateItem();
 
         MenuBaseData* base = get_base(this);
+        ASSERT(base);
+        if (!base)
+          break;
+
         bool select_first = static_cast<OpenMenuItemMessage*>(msg)->select_first();
 
-        ASSERT(base != NULL);
         ASSERT(base->is_processing);
         ASSERT(hasSubmenu());
 
@@ -722,14 +847,14 @@ bool MenuItem::onProcessMessage(Message* msg)
         menubox->setMenu(m_submenu);
 
         // New window and new menu-box
-        Window* window = new MenuBoxWindow(menubox);
+        auto window = new MenuBoxWindow(menubox);
 
         // Menubox position
         Rect pos = window->bounds();
 
         if (inBar()) {
-          pos.x = MID(0, bounds().x, ui::display_w()-pos.w);
-          pos.y = MAX(0, bounds().y2());
+          pos.x = base::clamp(bounds().x, 0, ui::display_w()-pos.w);
+          pos.y = std::max(0, bounds().y2());
         }
         else {
           int x_left = old_pos.x - pos.w;
@@ -737,9 +862,9 @@ bool MenuItem::onProcessMessage(Message* msg)
           int x, y = bounds().y-3*guiscale();
           Rect r1(0, 0, pos.w, pos.h), r2(0, 0, pos.w, pos.h);
 
-          r1.x = x_left = MID(0, x_left, ui::display_w()-pos.w);
-          r2.x = x_right = MID(0, x_right, ui::display_w()-pos.w);
-          r1.y = r2.y = y = MID(0, y, ui::display_h()-pos.h);
+          r1.x = x_left = base::clamp(x_left, 0, ui::display_w()-pos.w);
+          r2.x = x_right = base::clamp(x_right, 0, ui::display_w()-pos.w);
+          r1.y = r2.y = y = base::clamp(y, 0, ui::display_h()-pos.h);
 
           // Calculate both intersections
           gfx::Rect s1 = r1.createIntersection(old_pos);
@@ -759,6 +884,7 @@ bool MenuItem::onProcessMessage(Message* msg)
         }
 
         window->positionWindow(pos.x, pos.y);
+        add_scrollbars_if_needed(window);
 
         // Set the focus to the new menubox
         menubox->setFocusMagnet(true);
@@ -766,7 +892,7 @@ bool MenuItem::onProcessMessage(Message* msg)
         // Setup the highlight of the new menubox
         if (select_first) {
           // Select the first child
-          MenuItem* first_child = NULL;
+          MenuItem* first_child = nullptr;
 
           for (auto child : m_submenu->children()) {
             if (child->type() != kMenuItemWidget)
@@ -796,24 +922,25 @@ bool MenuItem::onProcessMessage(Message* msg)
       else if (msg->type() == kCloseMenuItemMessage) {
         bool last_of_close_chain = static_cast<CloseMenuItemMessage*>(msg)->last_of_close_chain();
         MenuBaseData* base = get_base(this);
-        Window* window;
+        ASSERT(base);
+        if (!base)
+          break;
 
-        ASSERT(base != NULL);
         ASSERT(base->is_processing);
 
         MenuBox* menubox = m_submenu_menubox;
-        m_submenu_menubox = NULL;
+        m_submenu_menubox = nullptr;
 
-        ASSERT(menubox != NULL);
+        ASSERT(menubox != nullptr);
 
-        window = (Window*)menubox->parent();
+        Window* window = menubox->window();
         ASSERT(window && window->type() == kWindowWidget);
 
         // Fetch the "menu" to avoid destroy it with 'delete'.
-        menubox->setMenu(NULL);
+        menubox->setMenu(nullptr);
 
         // Destroy the window
-        window->closeWindow(NULL);
+        window->closeWindow(nullptr);
 
         // Set the focus to this menu-box of this menu-item
         if (base->close_all)
@@ -843,6 +970,9 @@ bool MenuItem::onProcessMessage(Message* msg)
     case kTimerMessage:
       if (static_cast<TimerMessage*>(msg)->timer() == m_submenu_timer.get()) {
         MenuBaseData* base = get_base(this);
+        ASSERT(base);
+        if (!base)
+          break;
 
         ASSERT(hasSubmenu());
 
@@ -850,7 +980,7 @@ bool MenuItem::onProcessMessage(Message* msg)
         stopTimer();
 
         // If the submenu is closed, and we are not processing messages, open it
-        if (m_submenu_menubox == NULL && !base->is_processing)
+        if (m_submenu_menubox == nullptr && !base->is_processing)
           openSubmenu(false);
       }
       break;
@@ -919,11 +1049,25 @@ static MenuBox* get_base_menubox(Widget* widget)
       else {
         Menu* menu = static_cast<MenuBox*>(widget)->getMenu();
 
-        ASSERT(menu != NULL);
-        ASSERT(menu->getOwnerMenuItem() != NULL);
+        ASSERT(menu != nullptr);
+        ASSERT(menu->getOwnerMenuItem() != nullptr);
+
+        // We have received a crash report where the "menu" variable
+        // can be nullptr in the kMouseDownMessage message processing
+        // from MenuBox::onProcessMessage().
+        if (menu == nullptr)
+          return nullptr;
 
         widget = menu->getOwnerMenuItem();
       }
+    }
+    // This is useful for menuboxes inside a viewport (so we can scroll a viewport clicking scrollbars)
+    else if (widget->type() == kViewScrollbarWidget &&
+             widget->parent() &&
+             widget->parent()->type() == kViewWidget &&
+             static_cast<View*>(widget->parent())->attachedWidget() &&
+             static_cast<View*>(widget->parent())->attachedWidget()->type() == kMenuBoxWidget) {
+      widget = static_cast<View*>(widget->parent())->attachedWidget();
     }
     else {
       widget = widget->parent();
@@ -952,7 +1096,7 @@ MenuItem* Menu::getHighlightedItem()
     if (menuitem->isHighlighted())
       return menuitem;
   }
-  return NULL;
+  return nullptr;
 }
 
 void Menu::highlightItem(MenuItem* menuitem, bool click, bool open_submenu, bool select_first_child)
@@ -975,10 +1119,27 @@ void Menu::highlightItem(MenuItem* menuitem, bool click, bool open_submenu, bool
     if (!menuitem->isHighlighted()) {
       menuitem->setHighlighted(true);
       menuitem->invalidate();
+
+      // Scroll
+      View* view = View::getView(menuitem->parent()->parent());
+      if (view) {
+        gfx::Rect itemBounds = menuitem->bounds();
+        itemBounds.y -= menuitem->parent()->origin().y;
+
+        gfx::Point scroll = view->viewScroll();
+        gfx::Size visSize = view->visibleSize();
+
+        if (itemBounds.y < scroll.y)
+          scroll.y = itemBounds.y;
+        else if (itemBounds.y2() > scroll.y+visSize.h)
+          scroll.y = itemBounds.y2()-visSize.h;
+
+        view->setViewScroll(scroll);
+      }
     }
 
     // Highlight parents
-    if (getOwnerMenuItem() != NULL) {
+    if (getOwnerMenuItem() != nullptr) {
       static_cast<Menu*>(getOwnerMenuItem()->parent())
         ->highlightItem(getOwnerMenuItem(), false, false, false);
     }
@@ -991,7 +1152,10 @@ void Menu::highlightItem(MenuItem* menuitem, bool click, bool open_submenu, bool
           menuitem->openSubmenu(select_first_child);
 
         // The mouse was clicked
-        get_base(menuitem)->was_clicked = true;
+        MenuBaseData* base = get_base(menuitem);
+        ASSERT(base);
+        if (base)
+          base->was_clicked = true;
       }
     }
     // Execute menuitem action
@@ -1004,7 +1168,7 @@ void Menu::highlightItem(MenuItem* menuitem, bool click, bool open_submenu, bool
 
 void Menu::unhighlightItem()
 {
-  highlightItem(NULL, false, false, false);
+  highlightItem(nullptr, false, false, false);
 }
 
 bool MenuItem::inBar()
@@ -1025,7 +1189,7 @@ void MenuItem::openSubmenu(bool select_first)
   menu = this->parent();
 
   // The menu item is already opened?
-  ASSERT(m_submenu_menubox == NULL);
+  ASSERT(m_submenu_menubox == nullptr);
 
   ASSERT_VALID_WIDGET(menu);
 
@@ -1043,12 +1207,14 @@ void MenuItem::openSubmenu(bool select_first)
   }
 
   msg = new OpenMenuItemMessage(select_first);
-  msg->addRecipient(this);
+  msg->setRecipient(this);
   Manager::getDefault()->enqueueMessage(msg);
 
   // Get the 'base'
   MenuBaseData* base = get_base(this);
-  ASSERT(base != NULL);
+  ASSERT(base);
+  if (!base)
+    return;
   ASSERT(base->is_processing == false);
 
   // Reset flags
@@ -1070,11 +1236,11 @@ void MenuItem::closeSubmenu(bool last_of_close_chain)
   Message* msg;
   MenuBaseData* base;
 
-  ASSERT(m_submenu_menubox != NULL);
+  ASSERT(m_submenu_menubox != nullptr);
 
   // First: recursively close the children
   menu = m_submenu_menubox->getMenu();
-  ASSERT(menu != NULL);
+  ASSERT(menu != nullptr);
 
   for (auto child : menu->children()) {
     if (child->type() != kMenuItemWidget)
@@ -1086,7 +1252,7 @@ void MenuItem::closeSubmenu(bool last_of_close_chain)
 
   // Second: now we can close the 'menuitem'
   msg = new CloseMenuItemMessage(last_of_close_chain);
-  msg->addRecipient(this);
+  msg->setRecipient(this);
   Manager::getDefault()->enqueueMessage(msg);
 
   // If this is the last message of the chain, here we have the
@@ -1094,17 +1260,19 @@ void MenuItem::closeSubmenu(bool last_of_close_chain)
   if (last_of_close_chain) {
     // Get the 'base'
     base = get_base(this);
-    ASSERT(base != NULL);
-    ASSERT(base->is_processing == false);
+    ASSERT(base);
+    if (base) {
+      ASSERT(base->is_processing == false);
 
-    // Start processing
-    base->is_processing = true;
+      // Start processing
+      base->is_processing = true;
+    }
   }
 }
 
 void MenuItem::startTimer()
 {
-  if (m_submenu_timer == NULL)
+  if (m_submenu_timer == nullptr)
     m_submenu_timer.reset(new Timer(kTimeoutToOpenSubmenu, this));
 
   m_submenu_timer->start();
@@ -1120,7 +1288,7 @@ void MenuItem::stopTimer()
 void Menu::closeAll()
 {
   Menu* menu = this;
-  MenuItem* menuitem = NULL;
+  MenuItem* menuitem = nullptr;
   while (menu->m_menuitem) {
     menuitem = menu->m_menuitem;
     menu = static_cast<Menu*>(menuitem->parent());
@@ -1142,7 +1310,7 @@ void Menu::closeAll()
 
   menu->unhighlightItem();
 
-  if (menuitem != NULL) {
+  if (menuitem != nullptr) {
     if (menuitem->hasSubmenuOpened())
       menuitem->closeSubmenu(true);
   }
@@ -1165,7 +1333,7 @@ void Menu::closeAll()
 void MenuBox::closePopup()
 {
   Message* msg = new Message(kClosePopupMessage);
-  msg->addRecipient(this);
+  msg->setRecipient(this);
   Manager::getDefault()->enqueueMessage(msg);
 }
 
@@ -1190,24 +1358,30 @@ void MenuBox::stopFilteringMouseDown()
 void MenuBox::cancelMenuLoop()
 {
   Menu* menu = getMenu();
-  if (menu) {
-    // Do not close the popup menus if we're already processing
-    // open/close popup messages.
-    if (get_base(this)->is_processing)
-      return;
+  if (!menu)
+    return;
 
-    menu->closeAll();
+  MenuBaseData* base = get_base(this);
+  ASSERT(base);
+  if (!base)
+    return;
 
-    // Lost focus
-    Manager::getDefault()->freeFocus();
-  }
+  // Do not close the popup menus if we're already processing
+  // open/close popup messages.
+  if (base->is_processing)
+    return;
+
+  menu->closeAll();
+
+  // Lost focus
+  Manager::getDefault()->freeFocus();
 }
 
 void MenuItem::executeClick()
 {
   // Send the message
   Message* msg = new Message(kExecuteMenuItemMessage);
-  msg->addRecipient(this);
+  msg->setRecipient(this);
   Manager::getDefault()->enqueueMessage(msg);
 }
 
@@ -1226,10 +1400,10 @@ static MenuItem* check_for_letter(Menu* menu, const KeyMessage* keymsg)
     if (menuitem->isMnemonicPressed(keymsg))
       return menuitem;
   }
-  return NULL;
+  return nullptr;
 }
 
-// Finds the next item of `menuitem', if `menuitem' is NULL searchs
+// Finds the next item of `menuitem', if `menuitem' is nullptr searchs
 // from the first item in `menu'
 static MenuItem* find_nextitem(Menu* menu, MenuItem* menuitem)
 {
@@ -1251,9 +1425,9 @@ static MenuItem* find_nextitem(Menu* menu, MenuItem* menuitem)
   }
 
   if (menuitem)
-    return find_nextitem(menu, NULL);
+    return find_nextitem(menu, nullptr);
   else
-   return NULL;
+   return nullptr;
 }
 
 static MenuItem* find_previtem(Menu* menu, MenuItem* menuitem)
@@ -1276,9 +1450,9 @@ static MenuItem* find_previtem(Menu* menu, MenuItem* menuitem)
   }
 
   if (menuitem)
-    return find_previtem(menu, NULL);
+    return find_previtem(menu, nullptr);
   else
-    return NULL;
+    return nullptr;
 }
 
 //////////////////////////////////////////////////////////////////////

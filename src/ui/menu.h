@@ -1,4 +1,5 @@
 // Aseprite UI Library
+// Copyright (C) 2020-2021  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -28,6 +29,7 @@ namespace ui {
     ~Menu();
 
     void showPopup(const gfx::Point& pos);
+    Widget* findItemById(const char* id);
 
     // Returns the MenuItem that has as submenu this menu.
     MenuItem* getOwnerMenuItem() {
@@ -65,7 +67,7 @@ namespace ui {
     void setMenu(Menu* menu);
 
     MenuBaseData* getBase() {
-      return m_base;
+      return m_base.get();
     }
 
     // Closes all menu-boxes and goes back to the normal state of the
@@ -83,7 +85,7 @@ namespace ui {
     void startFilteringMouseDown();
     void stopFilteringMouseDown();
 
-    MenuBaseData* m_base;
+    std::unique_ptr<MenuBaseData> m_base;
 
     friend class Menu;
     friend class MenuItem;
@@ -116,11 +118,11 @@ namespace ui {
 
     // Returns true if the submenu is opened.
     bool hasSubmenuOpened() const {
-      return (m_submenu_menubox != NULL);
+      return (m_submenu_menubox != nullptr);
     }
 
-    // Returns the menu-box where the sub-menu has been opened, or just
-    // NULL if the sub-menu is closed.
+    // Returns the menu-box where the sub-menu has been opened, or
+    // just nullptr if the sub-menu is closed.
     MenuBox* getSubmenuContainer() const {
       return m_submenu_menubox;
     }

@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -29,6 +30,7 @@ namespace app {
     virtual void onScrollOtherEditor(Editor* editor) = 0;
     virtual void onDisposeOtherEditor(Editor* editor) = 0;
     virtual void onPreviewOtherEditor(Editor* editor) = 0;
+    virtual void onTagChangeEditor(Editor* editor, DocEvent& ev) = 0;
   };
 
   class DocView : public ui::Box,
@@ -72,11 +74,11 @@ namespace app {
     void onSpritePixelsModified(DocEvent& ev) override;
     void onLayerMergedDown(DocEvent& ev) override;
     void onAddLayer(DocEvent& ev) override;
-    void onBeforeRemoveLayer(DocEvent& ev) override;
     void onAddFrame(DocEvent& ev) override;
     void onRemoveFrame(DocEvent& ev) override;
+    void onTagChange(DocEvent& ev) override;
     void onAddCel(DocEvent& ev) override;
-    void onRemoveCel(DocEvent& ev) override;
+    void onAfterRemoveCel(DocEvent& ev) override;
     void onTotalFramesChanged(DocEvent& ev) override;
     void onLayerRestacked(DocEvent& ev) override;
 

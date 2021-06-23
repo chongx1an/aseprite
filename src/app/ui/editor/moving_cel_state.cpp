@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2020-2021  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -12,10 +13,11 @@
 
 #include "app/app.h"
 #include "app/cmd/set_cel_bounds.h"
+#include "app/commands/command.h"
 #include "app/context_access.h"
 #include "app/doc_api.h"
 #include "app/doc_range.h"
-#include "app/transaction.h"
+#include "app/tx.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/editor/editor_customization_delegate.h"
 #include "app/ui/main_window.h"
@@ -27,8 +29,10 @@
 #include "doc/layer.h"
 #include "doc/mask.h"
 #include "doc/sprite.h"
+#include "fmt/format.h"
 #include "ui/message.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace app {
@@ -43,8 +47,10 @@ MovingCelCollect::MovingCelCollect(Editor* editor, Layer* layer)
   if (layer && layer->isImage())
     m_mainCel = layer->cel(editor->frame());
 
-  DocRange range = App::instance()->timeline()->range();
-  if (!range.enabled()) {
+  Timeline* timeline = App::instance()->timeline();
+  DocRange range = timeline->range();
+  if (!range.enabled() ||
+      !timeline->isVisible()) {
     range.startRange(editor->layer(), editor->frame(), DocRange::kCels);
     range.endRange(editor->layer(), editor->frame());
   }
@@ -64,7 +70,7 @@ MovingCelCollect::MovingCelCollect(Editor* editor, Layer* layer)
   }
 
   // Record start positions of all cels in selected range
-  for (Cel* cel : get_unlocked_unique_cels(editor->sprite(), range2)) {
+  for (Cel* cel : get_unique_cels_to_move_cel(editor->sprite(), range2)) {
     Layer* layer = cel->layer();
     ASSERT(layer);
 
@@ -82,11 +88,10 @@ MovingCelState::MovingCelState(Editor* editor,
   , m_celList(collect.celList())
   , m_celOffset(0.0, 0.0)
   , m_celScale(1.0, 1.0)
-  , m_hasReference(false)
-  , m_scaled(false)
   , m_handle(handle)
+  , m_editor(editor)
 {
-  ContextWriter writer(m_reader, 500);
+  ContextWriter writer(m_reader);
   Doc* document = editor->document();
   ASSERT(!m_celList.empty());
 
@@ -109,6 +114,11 @@ MovingCelState::MovingCelState(Editor* editor,
     }
   }
 
+  // Hook BeforeCommandExecution signal so we know if the user wants
+  // to execute other command, so we can drop pixels.
+  m_ctxConn = UIContext::instance()->BeforeCommandExecution.connect(
+    &MovingCelState::onBeforeCommandExecution, this);
+
   m_cursorStart = editor->screenToEditorF(msg->position());
   editor->captureMouse();
 
@@ -120,36 +130,22 @@ MovingCelState::MovingCelState(Editor* editor,
   }
 }
 
+void MovingCelState::onBeforePopState(Editor* editor)
+{
+  m_ctxConn.disconnect();
+  StandbyState::onBeforePopState(editor);
+}
+
 bool MovingCelState::onMouseUp(Editor* editor, MouseMessage* msg)
 {
   Doc* document = editor->document();
-  bool modified = false;
-
-  // Here we put back all cels into their original coordinates (so we
-  // can add the undo information from the start position).
-  for (size_t i=0; i<m_celList.size(); ++i) {
-    Cel* cel = m_celList[i];
-    const gfx::RectF& celStart = m_celStarts[i];
-
-    if (cel->layer()->isReference()) {
-      if (cel->boundsF() != celStart) {
-        cel->setBoundsF(celStart);
-        modified = true;
-      }
-    }
-    else {
-      if (cel->bounds() != gfx::Rect(celStart)) {
-        cel->setBounds(gfx::Rect(celStart));
-        modified = true;
-      }
-    }
-  }
+  bool modified = restoreCelStartPosition();
 
   if (modified) {
     {
       ContextWriter writer(m_reader, 1000);
-      Transaction transaction(writer.context(), "Cel Movement", ModifyDocument);
-      DocApi api = document->getApi(transaction);
+      Tx tx(writer.context(), "Cel Movement", ModifyDocument);
+      DocApi api = document->getApi(tx);
       gfx::Point intOffset = intCelOffset();
 
       // And now we move the cel (or all selected range) to the new position.
@@ -163,7 +159,7 @@ bool MovingCelState::onMouseUp(Editor* editor, MouseMessage* msg)
             celBounds.w *= m_celScale.w;
             celBounds.h *= m_celScale.h;
           }
-          transaction.execute(new cmd::SetCelBoundsF(cel, celBounds));
+          tx(new cmd::SetCelBoundsF(cel, celBounds));
         }
         else {
           api.setCelPosition(writer.sprite(), cel,
@@ -183,7 +179,7 @@ bool MovingCelState::onMouseUp(Editor* editor, MouseMessage* msg)
                             document->mask()->bounds().y + intOffset.y);
       }
 
-      transaction.commit();
+      tx.commit();
     }
 
     // Redraw all editors. We've to notify all views about this
@@ -191,6 +187,13 @@ bool MovingCelState::onMouseUp(Editor* editor, MouseMessage* msg)
     // only the cels in the current editor. And at this point we'd
     // like to update all the editors.
     document->notifyGeneralUpdate();
+  }
+  // Just a click in the current layer
+  else if (!m_moved & !m_scaled) {
+    // Deselect the whole range if we are in "Auto Select Layer"
+    if (editor->isAutoSelectLayer()) {
+      App::instance()->timeline()->clearAndInvalidateRange();
+    }
   }
 
   // Restore the mask visibility.
@@ -222,6 +225,8 @@ bool MovingCelState::onMouseMove(Editor* editor, MouseMessage* msg)
           m_celOffset.y = 0;
         }
       }
+      if (!m_moved && intCelOffset() != gfx::Point(0, 0))
+        m_moved = true;
       break;
 
     case ScaleSEHandle: {
@@ -233,7 +238,7 @@ bool MovingCelState::onMouseMove(Editor* editor, MouseMessage* msg)
 
       if (int(editor->getCustomizationDelegate()
               ->getPressedKeyAction(KeyContext::ScalingSelection) & KeyAction::MaintainAspectRatio)) {
-        m_celScale.w = m_celScale.h = MAX(m_celScale.w, m_celScale.h);
+        m_celScale.w = m_celScale.h = std::max(m_celScale.w, m_celScale.h);
       }
 
       m_scaled = true;
@@ -250,6 +255,7 @@ bool MovingCelState::onMouseMove(Editor* editor, MouseMessage* msg)
     if (cel->layer()->isReference()) {
       celBounds.x += m_celOffset.x;
       celBounds.y += m_celOffset.y;
+      m_moved = true;
       if (m_scaled) {
         celBounds.w *= m_celScale.w;
         celBounds.h *= m_celScale.h;
@@ -287,29 +293,31 @@ bool MovingCelState::onUpdateStatusBar(Editor* editor)
 
   if (m_hasReference) {
     if (m_scaled && m_cel) {
-      StatusBar::instance()->setStatusText
-        (0,
-         ":pos: %.2f %.2f :offset: %.2f %.2f :size: %.2f%% %.2f%%",
-         pos.x, pos.y,
-         m_celOffset.x, m_celOffset.y,
-         100.0*m_celScale.w*m_celMainSize.w/m_cel->image()->width(),
-         100.0*m_celScale.h*m_celMainSize.h/m_cel->image()->height());
+      StatusBar::instance()->setStatusText(
+        0,
+        fmt::format(
+          ":pos: {:.2f} {:.2f} :offset: {:.2f} {:.2f} :size: {:.2f}% {:.2f}%",
+          pos.x, pos.y,
+          m_celOffset.x, m_celOffset.y,
+          100.0*m_celScale.w*m_celMainSize.w/m_cel->image()->width(),
+          100.0*m_celScale.h*m_celMainSize.h/m_cel->image()->height()));
     }
     else {
-      StatusBar::instance()->setStatusText
-        (0,
-         ":pos: %.2f %.2f :offset: %.2f %.2f",
-         pos.x, pos.y,
-         m_celOffset.x, m_celOffset.y);
+      StatusBar::instance()->setStatusText(
+        0,
+        fmt::format(
+          ":pos: {:.2f} {:.2f} :offset: {:.2f} {:.2f}",
+          pos.x, pos.y,
+          m_celOffset.x, m_celOffset.y));
     }
   }
   else {
     gfx::Point intOffset = intCelOffset();
-    StatusBar::instance()->setStatusText
-      (0,
-       ":pos: %3d %3d :offset: %3d %3d",
-       int(pos.x), int(pos.y),
-       intOffset.x, intOffset.y);
+    StatusBar::instance()->setStatusText(
+      0,
+      fmt::format(":pos: {:3d} {:3d} :offset: {:3d} {:3d}",
+                  int(pos.x), int(pos.y),
+                  intOffset.x, intOffset.y));
   }
 
   return true;
@@ -319,6 +327,51 @@ gfx::Point MovingCelState::intCelOffset() const
 {
   return gfx::Point(int(std::round(m_celOffset.x)),
                     int(std::round(m_celOffset.y)));
+}
+
+bool MovingCelState::restoreCelStartPosition() const
+{
+  bool modified = false;
+
+  // Here we put back all cels into their original coordinates (so we
+  // can add the undo information from the start position).
+  for (size_t i=0; i<m_celList.size(); ++i) {
+    Cel* cel = m_celList[i];
+    const gfx::RectF& celStart = m_celStarts[i];
+
+    if (cel->layer()->isReference()) {
+      if (cel->boundsF() != celStart) {
+        cel->setBoundsF(celStart);
+        modified = true;
+      }
+    }
+    else {
+      if (cel->bounds() != gfx::Rect(celStart)) {
+        cel->setBounds(gfx::Rect(celStart));
+        modified = true;
+      }
+    }
+  }
+  return modified;
+}
+
+void MovingCelState::onBeforeCommandExecution(CommandExecutionEvent& ev)
+{
+  if (ev.command()->id() == CommandId::Undo() ||
+      ev.command()->id() == CommandId::Redo() ||
+      ev.command()->id() == CommandId::Cancel()) {
+    restoreCelStartPosition();
+    Doc* document = m_editor->document();
+    // Restore the mask visibility.
+    if (m_maskVisible) {
+      document->setMaskVisible(m_maskVisible);
+      document->generateMaskBoundaries();
+    }
+    m_editor->backToPreviousState();
+    m_editor->releaseMouse();
+    m_editor->invalidate();
+  }
+  ev.cancel();
 }
 
 } // namespace app

@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2020  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
@@ -16,8 +17,7 @@
 #include "app/pref/preferences.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/skin/skin_theme.h"
-#include "base/bind.h"
-#include "she/surface.h"
+#include "os/surface.h"
 #include "ui/paint_event.h"
 #include "ui/resize_event.h"
 #include "ui/scroll_region_event.h"
@@ -42,7 +42,7 @@ EditorView::EditorView(EditorView::Type type)
 {
   m_scrollSettingsConn =
     Preferences::instance().editor.showScrollbars.AfterChange.connect(
-      base::Bind(&EditorView::setupScrollbars, this));
+      [this]{ setupScrollbars(); });
 
   InitTheme.connect(
     [this]{
@@ -121,8 +121,6 @@ void EditorView::onSetViewScroll(const gfx::Point& pt)
 
 void EditorView::onScrollRegion(ui::ScrollRegionEvent& ev)
 {
-  View::onScrollRegion(ev);
-
   gfx::Region& region = ev.region();
   Editor* editor = this->editor();
   ASSERT(editor);

@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -15,22 +16,24 @@
 #include "base/disable_copying.h"
 #include "base/mutex.h"
 #include "base/rw_lock.h"
-#include "base/shared_ptr.h"
 #include "doc/blend_mode.h"
 #include "doc/color.h"
 #include "doc/document.h"
 #include "doc/frame.h"
+#include "doc/mask_boundaries.h"
 #include "doc/pixel_format.h"
 #include "gfx/rect.h"
 #include "obs/observable.h"
+#include "os/color_space.h"
 
+#include <atomic>
+#include <memory>
 #include <string>
 
 namespace doc {
   class Cel;
   class Layer;
   class Mask;
-  class MaskBoundaries;
   class Sprite;
 }
 
@@ -55,12 +58,12 @@ namespace app {
   // An application document. It is the class used to contain one file
   // opened and being edited by the user (a sprite).
   class Doc : public doc::Document,
-              public base::RWLock,
               public obs::observable<DocObserver> {
     enum Flags {
       kAssociatedToFile = 1, // This sprite is associated to a file in the file-system
       kMaskVisible      = 2, // The mask wasn't hidden by the user
       kInhibitBackup    = 4, // Inhibit the backup process
+      kFullyBackedUp    = 8, // Full backup was done
     };
   public:
     Doc(Sprite* sprite);
@@ -68,6 +71,21 @@ namespace app {
 
     Context* context() const { return m_ctx; }
     void setContext(Context* ctx);
+
+    // Lock/unlock API (RWLock wrapper)
+    bool canWriteLockFromRead() const;
+    bool readLock(int timeout);
+    bool writeLock(int timeout);
+    bool upgradeToWrite(int timeout);
+    void downgradeToRead();
+    void unlock();
+
+    bool weakLock(std::atomic<base::RWLock::WeakLock>* weak_lock_flag);
+    void weakUnlock();
+
+    // Sets active/running transaction.
+    void setTransaction(Transaction* transaction);
+    Transaction* transaction() { return m_transaction; }
 
     // Returns a high-level API: observable and undoable methods.
     DocApi getApi(Transaction& transaction);
@@ -81,16 +99,21 @@ namespace app {
     color_t bgColor() const;
     color_t bgColor(Layer* layer) const;
 
+    os::ColorSpacePtr osColorSpace() const { return m_osColorSpace; }
+
     //////////////////////////////////////////////////////////////////////
     // Notifications
 
     void notifyGeneralUpdate();
+    void notifyColorSpaceChanged();
+    void notifyPaletteChanged();
     void notifySpritePixelsModified(Sprite* sprite, const gfx::Region& region, frame_t frame);
     void notifyExposeSpritePixels(Sprite* sprite, const gfx::Region& region);
     void notifyLayerMergedDown(Layer* srcLayer, Layer* targetLayer);
     void notifyCelMoved(Layer* fromLayer, frame_t fromFrame, Layer* toLayer, frame_t toFrame);
     void notifyCelCopied(Layer* fromLayer, frame_t fromFrame, Layer* toLayer, frame_t toFrame);
     void notifySelectionChanged();
+    void notifySelectionBoundariesChanged();
 
     //////////////////////////////////////////////////////////////////////
     // File related properties
@@ -116,19 +139,31 @@ namespace app {
     bool inhibitBackup() const;
     void setInhibitBackup(const bool inhibitBackup);
 
+    void markAsBackedUp();
+    bool isFullyBackedUp() const;
+
     //////////////////////////////////////////////////////////////////////
     // Loaded options from file
 
-    void setFormatOptions(const base::SharedPtr<FormatOptions>& format_options);
-    base::SharedPtr<FormatOptions> getFormatOptions() { return m_format_options; }
+    void setFormatOptions(const FormatOptionsPtr& format_options);
+    FormatOptionsPtr formatOptions() const { return m_format_options; }
 
     //////////////////////////////////////////////////////////////////////
     // Boundaries
 
+    void destroyMaskBoundaries();
     void generateMaskBoundaries(const Mask* mask = nullptr);
 
-    const MaskBoundaries* getMaskBoundaries() const {
-     return m_maskBoundaries.get();
+    const MaskBoundaries& maskBoundaries() const {
+      return m_maskBoundaries;
+    }
+
+    MaskBoundaries& maskBoundaries() {
+      return m_maskBoundaries;
+    }
+
+    bool hasMaskBoundaries() const {
+      return !m_maskBoundaries.isEmpty();
     }
 
     //////////////////////////////////////////////////////////////////////
@@ -188,29 +223,43 @@ namespace app {
 
   private:
     void removeFromContext();
+    void updateOSColorSpace(bool appWideSignal);
 
+    // The document is in the collection of documents of this context.
     Context* m_ctx;
+
+    // Internal states of the document.
     int m_flags;
+
+    // Read-Write locks.
+    base::RWLock m_rwLock;
 
     // Undo and redo information about the document.
     std::unique_ptr<DocUndo> m_undo;
 
+    // Current transaction for this document (when this is commit(), a
+    // new undo command is added to m_undo).
+    Transaction* m_transaction;
+
     // Selected mask region boundaries
-    std::unique_ptr<doc::MaskBoundaries> m_maskBoundaries;
+    doc::MaskBoundaries m_maskBoundaries;
 
     // Data to save the file in the same format that it was loaded
-    base::SharedPtr<FormatOptions> m_format_options;
+    FormatOptionsPtr m_format_options;
 
     // Extra cel used to draw extra stuff (e.g. editor's pen preview, pixels in movement, etc.)
     ExtraCelRef m_extraCel;
 
     // Current mask.
-    std::unique_ptr<Mask> m_mask;
+    std::unique_ptr<doc::Mask> m_mask;
 
     // Current transformation.
     Transformation m_transformation;
 
     gfx::Point m_lastDrawingPoint;
+
+    // Last used color space to render a sprite.
+    os::ColorSpacePtr m_osColorSpace;
 
     DISABLE_COPYING(Doc);
   };

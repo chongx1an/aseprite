@@ -1,5 +1,6 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2016 David Capello
+// Copyright (C) 2019-2021  Igara Studio S.A.
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -13,7 +14,8 @@
 #include "base/base.h"
 #include "doc/palette.h"
 #include "doc/palette_picks.h"
-#include "doc/rgbmap.h"
+
+#include <algorithm>
 
 namespace doc {
 
@@ -71,7 +73,7 @@ Remap create_remap_to_change_palette(
   const int oldMaskIndex,
   const bool remapMaskIndex)
 {
-  Remap remap(MAX(oldPalette->size(), newPalette->size()));
+  Remap remap(std::max(oldPalette->size(), newPalette->size()));
   int maskIndex = oldMaskIndex;
 
   if (maskIndex >= 0) {
@@ -93,9 +95,6 @@ Remap create_remap_to_change_palette(
       remap.map(maskIndex, maskIndex);
     }
   }
-
-  RgbMap rgbmap;
-  rgbmap.regenerate(newPalette, maskIndex);
 
   for (int i=0; i<oldPalette->size(); ++i) {
     if (i == oldMaskIndex)
@@ -139,7 +138,11 @@ Remap Remap::invert() const
 {
   Remap inv(size());
   for (int i=0; i<size(); ++i)
-    inv.map(operator[](i), i);
+    inv.unused(i);
+  for (int i=0; i<size(); ++i) {
+    if (operator[](i) != kUnused)
+      inv.map(operator[](i), i);
+  }
   return inv;
 }
 
@@ -158,7 +161,8 @@ bool Remap::isFor8bit() const
 bool Remap::isInvertible(const PalettePicks& usedEntries) const
 {
   PalettePicks picks(size());
-  for (int i=0; i<size(); ++i) {
+  const int n = std::min(size(), usedEntries.size());
+  for (int i=0; i<n; ++i) {
     if (!usedEntries[i])
       continue;
 

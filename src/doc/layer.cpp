@@ -1,5 +1,6 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2018 David Capello
+// Copyright (C) 2020-2021  Igara Studio S.A.
+// Copyright (C) 2001-2018 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -174,6 +175,35 @@ bool Layer::isEditableHierarchy() const
     layer = layer->parent();
   }
   return true;
+}
+
+// It's like isVisibleHierarchy + isEditableHierarchy. Returns true if
+// the whole layer hierarchy is unlocked and visible, so the user can
+// edit its pixels without unexpected side-effects (e.g. editing
+// hidden layers).
+bool Layer::canEditPixels() const
+{
+  const Layer* layer = this;
+  while (layer) {
+    if (!layer->isVisible() ||
+        !layer->isEditable() ||
+        layer->isReference()) { // Cannot edit pixels from reference layers
+      return false;
+    }
+    layer = layer->parent();
+  }
+  return true;
+}
+
+bool Layer::hasAncestor(const Layer* ancestor) const
+{
+  Layer* it = parent();
+  while (it) {
+    if (it == ancestor)
+      return true;
+    it = it->parent();
+  }
+  return false;
 }
 
 Cel* Layer::cel(frame_t frame) const
@@ -372,7 +402,7 @@ void LayerImage::displaceFrames(frame_t fromThis, frame_t delta)
 LayerGroup::LayerGroup(Sprite* sprite)
   : Layer(ObjectType::LayerGroup, sprite)
 {
-  setName("Layer Set");
+  setName("Group");
 }
 
 LayerGroup::~LayerGroup()

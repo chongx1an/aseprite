@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2019-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -18,7 +19,7 @@
 #include "app/doc_api.h"
 #include "app/doc_range.h"
 #include "app/transaction.h"
-#include "app/ui/timeline/timeline.h"
+#include "app/tx.h"
 #include "doc/layer.h"
 #include "doc/sprite.h"
 
@@ -53,7 +54,6 @@ static void move_or_copy_cels(
         LayerImage* srcLayer = static_cast<LayerImage*>(srcLayers[i]);
 
         if (i < dstLayers.size() && dstLayers[i]->isImage()) {
-          LayerImage* srcLayer = static_cast<LayerImage*>(srcLayers[i]);
           LayerImage* dstLayer = static_cast<LayerImage*>(dstLayers[i]);
 
 #ifdef TRACE_RANGE_OPS
@@ -67,6 +67,8 @@ static void move_or_copy_cels(
             case Copy: api.copyCel(srcLayer, *srcFrame, dstLayer, *dstFrame); break;
           }
         }
+        // All cels moved from a image layer and dropped in other kind
+        // of layer (e.g. a group) will be discarded/deleted.
         else if (op == Move) {
           api.clearCel(srcLayer, *srcFrame);
         }
@@ -262,7 +264,7 @@ static DocRange drop_range_op(
              (place == kDocRangeBefore && to.firstFrame() == from.lastFrame()+1) ||
              (place == kDocRangeAfter && to.lastFrame() == from.firstFrame()-1)) &&
             // If there are tags, this might not be a no-op
-            (sprite->frameTags().empty() ||
+            (sprite->tags().empty() ||
              tagsHandling == kDontAdjustTags)) {
           return from;
         }
@@ -273,8 +275,8 @@ static DocRange drop_range_op(
       if (op == Move) {
         SelectedLayers srcSelLayers = from.selectedLayers();
         SelectedLayers dstSelLayers = to.selectedLayers();
-        LayerList srcLayers = srcSelLayers.toLayerList();
-        LayerList dstLayers = dstSelLayers.toLayerList();
+        LayerList srcLayers = srcSelLayers.toBrowsableLayerList();
+        LayerList dstLayers = dstSelLayers.toBrowsableLayerList();
         ASSERT(!srcLayers.empty());
         if (srcLayers.empty())
           return from;
@@ -330,9 +332,9 @@ static DocRange drop_range_op(
   {
     const app::Context* context = static_cast<app::Context*>(doc->context());
     const ContextReader reader(context);
-    ContextWriter writer(reader, 500);
-    Transaction transaction(writer.context(), undoLabel, ModifyDocument);
-    DocApi api = doc->getApi(transaction);
+    ContextWriter writer(reader);
+    Tx tx(writer.context(), undoLabel, ModifyDocument);
+    DocApi api = doc->getApi(tx);
 
     // TODO Try to add the range with just one call to DocApi
     // methods, to avoid generating a lot of cmd::SetCelFrame (see
@@ -345,8 +347,8 @@ static DocRange drop_range_op(
         if (allLayers.empty())
           break;
 
-        LayerList srcLayers = from.selectedLayers().toLayerList();
-        LayerList dstLayers = to.selectedLayers().toLayerList();
+        LayerList srcLayers = from.selectedLayers().toBrowsableLayerList();
+        LayerList dstLayers = to.selectedLayers().toBrowsableLayerList();
         if (srcLayers.empty() ||
             dstLayers.empty())
           throw std::invalid_argument("You need to specify a non-empty cels range");
@@ -392,8 +394,8 @@ static DocRange drop_range_op(
         if (allLayers.empty())
           break;
 
-        LayerList srcLayers = from.selectedLayers().toLayerList();
-        LayerList dstLayers = to.selectedLayers().toLayerList();
+        LayerList srcLayers = from.selectedLayers().toBrowsableLayerList();
+        LayerList dstLayers = to.selectedLayers().toBrowsableLayerList();
         ASSERT(!srcLayers.empty());
 
         switch (op) {
@@ -455,9 +457,9 @@ static DocRange drop_range_op(
     }
 
     if (resultRange.type() != DocRange::kNone)
-      transaction.setNewDocRange(resultRange);
+      tx.setNewDocRange(resultRange);
 
-    transaction.commit();
+    tx.commit();
   }
 
   return resultRange;
@@ -487,9 +489,9 @@ void reverse_frames(Doc* doc, const DocRange& range)
 {
   const app::Context* context = static_cast<app::Context*>(doc->context());
   const ContextReader reader(context);
-  ContextWriter writer(reader, 500);
-  Transaction transaction(writer.context(), "Reverse Frames");
-  DocApi api = doc->getApi(transaction);
+  ContextWriter writer(reader);
+  Tx tx(writer.context(), "Reverse Frames");
+  DocApi api = doc->getApi(tx);
   Sprite* sprite = doc->sprite();
   LayerList layers;
   frame_t frameBegin, frameEnd;
@@ -500,7 +502,7 @@ void reverse_frames(Doc* doc, const DocRange& range)
     case DocRange::kCels:
       frameBegin = range.firstFrame();
       frameEnd = range.lastFrame();
-      layers = range.selectedLayers().toLayerList();
+      layers = range.selectedLayers().toBrowsableLayerList();
       swapCels = true;
       break;
     case DocRange::kFrames:
@@ -512,7 +514,7 @@ void reverse_frames(Doc* doc, const DocRange& range)
     case DocRange::kLayers:
       frameBegin = frame_t(0);
       frameEnd = sprite->totalFrames()-1;
-      layers = range.selectedLayers().toLayerList();
+      layers = range.selectedLayers().toBrowsableLayerList();
       swapCels = true;
       break;
   }
@@ -544,8 +546,8 @@ void reverse_frames(Doc* doc, const DocRange& range)
     }
   }
 
-  transaction.setNewDocRange(range);
-  transaction.commit();
+  tx.setNewDocRange(range);
+  tx.commit();
 }
 
 } // namespace app

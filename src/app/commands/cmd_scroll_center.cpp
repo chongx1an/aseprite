@@ -19,7 +19,6 @@ namespace app {
 class ScrollCenterCommand : public Command {
 public:
   ScrollCenterCommand();
-  Command* clone() const override { return new ScrollCenterCommand(*this); }
 
 protected:
   bool onEnabled(Context* context) override;
@@ -38,7 +37,7 @@ bool ScrollCenterCommand::onEnabled(Context* context)
 
 void ScrollCenterCommand::onExecute(Context* context)
 {
-  current_editor->setDefaultScroll();
+  current_editor->setScrollToCenter();
 }
 
 Command* CommandFactory::createScrollCenterCommand()

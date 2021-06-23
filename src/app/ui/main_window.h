@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2021  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -15,6 +16,7 @@
 
 namespace ui {
   class Splitter;
+  class TooltipManager;
 }
 
 namespace app {
@@ -56,6 +58,7 @@ namespace app {
 
     MainMenuBar* getMenuBar() { return m_menuBar; }
     ContextBar* getContextBar() { return m_contextBar; }
+    StatusBar* statusBar() { return m_statusBar; }
     WorkspaceTabs* getTabsBar() { return m_tabsBar; }
     Timeline* getTimeline() { return m_timeline; }
     Workspace* getWorkspace() { return m_workspace; }
@@ -68,9 +71,11 @@ namespace app {
     void showNotification(INotificationDelegate* del);
     void showHomeOnOpen();
     void showHome();
-    bool isHomeSelected();
+    void showDefaultStatusBar();
     void showDevConsole();
-    void showBrowser(const std::string& filename);
+    void showBrowser(const std::string& filename,
+                     const std::string& section = std::string());
+    bool isHomeSelected() const;
 
     Mode getMode() const { return m_mode; }
     void setMode(Mode mode);
@@ -79,7 +84,9 @@ namespace app {
     void setTimelineVisibility(bool visible);
     void popTimeline();
 
-    void showDataRecovery(crash::DataRecovery* dataRecovery);
+    // When crash::DataRecovery finish to search for sessions, this
+    // function is called.
+    void dataRecoverySessionsAreReady();
 
     // TabsDelegate implementation.
     bool isTabModified(Tabs* tabs, TabView* tabView) override;
@@ -90,6 +97,7 @@ namespace app {
     void onContextMenuTab(Tabs* tabs, TabView* tabView) override;
     void onTabsContainerDoubleClicked(Tabs* tabs) override;
     void onMouseOverTab(Tabs* tabs, TabView* tabView) override;
+    void onMouseLeaveTab() override;
     DropViewPreviewResult onFloatingTab(Tabs* tabs, TabView* tabView, const gfx::Point& pos) override;
     void onDockingTab(Tabs* tabs, TabView* tabView) override;
     DropTabResult onDropTab(Tabs* tabs, TabView* tabView, const gfx::Point& pos, bool clone) override;
@@ -106,10 +114,11 @@ namespace app {
     HomeView* getHomeView();
     void configureWorkspaceLayout();
 
+    ui::TooltipManager* m_tooltipManager;
     MainMenuBar* m_menuBar;
-    ContextBar* m_contextBar;
     StatusBar* m_statusBar;
     ColorBar* m_colorBar;
+    ContextBar* m_contextBar;
     ui::Widget* m_toolBar;
     WorkspaceTabs* m_tabsBar;
     Mode m_mode;

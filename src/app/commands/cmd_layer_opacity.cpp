@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2020  Igara Studio S.A.
 // Copyright (C) 2016-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -16,8 +17,9 @@
 #include "app/context_access.h"
 #include "app/i18n/strings.h"
 #include "app/modules/gui.h"
-#include "app/transaction.h"
+#include "app/tx.h"
 #include "app/ui/timeline/timeline.h"
+#include "base/clamp.h"
 #include "doc/layer.h"
 #include "fmt/format.h"
 
@@ -49,7 +51,7 @@ LayerOpacityCommand::LayerOpacityCommand()
 void LayerOpacityCommand::onLoadParams(const Params& params)
 {
   m_opacity = params.get_as<int>("opacity");
-  m_opacity = MID(0, m_opacity, 255);
+  m_opacity = base::clamp(m_opacity, 0, 255);
 }
 
 bool LayerOpacityCommand::onEnabled(Context* context)
@@ -68,7 +70,7 @@ void LayerOpacityCommand::onExecute(Context* context)
     return;
 
   {
-    Transaction transaction(writer.context(), "Set Layer Opacity");
+    Tx tx(writer.context(), "Set Layer Opacity");
 
     // TODO the range of selected frames should be in app::Site.
     SelectedLayers selLayers;
@@ -82,11 +84,10 @@ void LayerOpacityCommand::onExecute(Context* context)
 
     for (auto layer : selLayers) {
       if (layer->isImage())
-        transaction.execute(
-          new cmd::SetLayerOpacity(static_cast<LayerImage*>(layer), m_opacity));
+        tx(new cmd::SetLayerOpacity(static_cast<LayerImage*>(layer), m_opacity));
     }
 
-    transaction.commit();
+    tx.commit();
   }
 
   update_screen_for_document(writer.document());

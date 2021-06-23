@@ -1,5 +1,6 @@
 // Aseprite
-// Copyright (C) 2001-2017  David Capello
+// Copyright (C) 2019-2020  Igara Studio S.A.
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -18,7 +19,7 @@
 #include "app/tools/active_tool.h"
 #include "app/tools/ink.h"
 #include "app/tools/tool_box.h"
-#include "app/transaction.h"
+#include "app/tx.h"
 #include "app/ui/context_bar.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/editor/select_box_state.h"
@@ -35,14 +36,13 @@ class NewBrushCommand : public Command
                       , public SelectBoxDelegate {
 public:
   NewBrushCommand();
-  Command* clone() const override { return new NewBrushCommand(*this); }
 
 protected:
   bool onEnabled(Context* context) override;
   void onExecute(Context* context) override;
 
   // SelectBoxDelegate impl
-  void onQuickboxEnd(Editor* editor, const gfx::Rect& rect, ui::MouseButtons buttons) override;
+  void onQuickboxEnd(Editor* editor, const gfx::Rect& rect, ui::MouseButton button) override;
   void onQuickboxCancel(Editor* editor) override;
 
   std::string onGetContextBarHelp() override {
@@ -101,7 +101,7 @@ void NewBrushCommand::onExecute(Context* context)
   }
 }
 
-void NewBrushCommand::onQuickboxEnd(Editor* editor, const gfx::Rect& rect, ui::MouseButtons buttons)
+void NewBrushCommand::onQuickboxEnd(Editor* editor, const gfx::Rect& rect, ui::MouseButton button)
 {
   Mask mask;
   mask.replace(rect);
@@ -109,13 +109,16 @@ void NewBrushCommand::onQuickboxEnd(Editor* editor, const gfx::Rect& rect, ui::M
   selectPencilTool();
 
   // If the right-button was used, we clear the selected area.
-  if (buttons & ui::kButtonRight) {
+  if (button == ui::kButtonRight) {
     try {
-      ContextWriter writer(UIContext::instance(), 250);
+      ContextWriter writer(UIContext::instance());
       if (writer.cel()) {
-        Transaction transaction(writer.context(), "Clear");
-        transaction.execute(new cmd::ClearRect(writer.cel(), rect));
-        transaction.commit();
+        gfx::Rect canvasRect = (rect & writer.cel()->bounds());
+        if (!canvasRect.isEmpty()) {
+          Tx tx(writer.context(), "Clear");
+          tx(new cmd::ClearRect(writer.cel(), canvasRect));
+          tx.commit();
+        }
       }
     }
     catch (const std::exception& ex) {
@@ -138,7 +141,8 @@ void NewBrushCommand::onQuickboxCancel(Editor* editor)
 
 void NewBrushCommand::createBrush(const Site& site, const Mask* mask)
 {
-  doc::ImageRef image(new_image_from_mask(site, mask));
+  doc::ImageRef image(new_image_from_mask(site, mask,
+                                          Preferences::instance().experimental.newBlend()));
   if (!image)
     return;
 
@@ -171,7 +175,7 @@ void NewBrushCommand::createBrush(const Site& site, const Mask* mask)
     std::string tooltip;
     tooltip += "Shortcut: ";
     tooltip += key->accels().front().toString();
-    StatusBar::instance()->showTip(2000, tooltip.c_str());
+    StatusBar::instance()->showTip(2000, tooltip);
   }
 }
 

@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2019-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -27,16 +28,20 @@ void DeselectMask::onExecute()
   Doc* doc = document();
   m_oldMask.reset(doc->isMaskVisible() ? new Mask(*doc->mask()): nullptr);
   doc->setMaskVisible(false);
+  doc->notifySelectionChanged();
 }
 
 void DeselectMask::onUndo()
 {
   Doc* doc = document();
 
-  doc->setMask(m_oldMask.get());
-  doc->setMaskVisible(true);
+  if (m_oldMask) {
+    doc->setMask(m_oldMask.get());
+    doc->setMaskVisible(true);
+    m_oldMask.reset();
+  }
 
-  m_oldMask.reset();
+  doc->notifySelectionChanged();
 }
 
 size_t DeselectMask::onMemSize() const

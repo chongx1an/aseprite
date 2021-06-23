@@ -1,4 +1,5 @@
 // Aseprite UI Library
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -18,6 +19,12 @@ namespace ui {
 
   class Entry : public Widget {
   public:
+    struct Range {
+      int from = -1, to = -1;
+      bool isEmpty() const { return from < 0; }
+      int size() const { return to - from; }
+    };
+
     Entry(const int maxsize, const char *format, ...);
     ~Entry();
 
@@ -34,10 +41,12 @@ namespace ui {
 
     void setCaretPos(int pos);
     void setCaretToEnd();
+
     void selectText(int from, int to);
     void selectAllText();
     void deselectText();
     std::string selectedText() const;
+    Range selectedRange() const;
 
     void setSuffix(const std::string& suffix);
     const std::string& getSuffix() { return m_suffix; }
@@ -45,9 +54,11 @@ namespace ui {
     void setTranslateDeadKeys(bool state);
 
     // for themes
-    void getEntryThemeInfo(int* scroll, int* caret, int* state,
-                           int* selbeg, int* selend) const;
+    void getEntryThemeInfo(int* scroll, int* caret, int* state, Range* range) const;
     gfx::Rect getEntryTextBounds() const;
+
+    static gfx::Size sizeHintWithText(Entry* entry,
+                                      const std::string& text);
 
     // Signals
     obs::signal<void()> Change;
@@ -90,6 +101,8 @@ namespace ui {
     bool isPosInSelection(int pos);
     void showEditPopupMenu(const gfx::Point& pt);
     void recalcCharBoxes(const std::string& text);
+    bool shouldStartTimer(const bool hasFocus);
+    void deleteRange(const Range& range, std::string& text);
 
     class CalcBoxesTextDelegate;
 

@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2020  Igara Studio S.A.
 // Copyright (C) 2018  David Capello
 //
 // This program is distributed under the terms of
@@ -14,7 +15,7 @@
 #include "app/console.h"
 #include "app/context_access.h"
 #include "app/modules/gui.h"
-#include "app/transaction.h"
+#include "app/tx.h"
 #include "app/ui_context.h"
 #include "doc/cel.h"
 #include "doc/document.h"
@@ -96,10 +97,9 @@ void select_layer_boundaries(Layer* layer,
   }
 
   try {
-    ContextWriter writer(UIContext::instance(), 500);
+    ContextWriter writer(UIContext::instance());
     Doc* doc = writer.document();
-    Sprite* spr = layer->sprite();
-    ASSERT(doc == spr->document());
+    ASSERT(doc == layer->sprite()->document());
 
     if (doc->isMaskVisible()) {
       switch (op) {
@@ -121,12 +121,10 @@ void select_layer_boundaries(Layer* layer,
       }
     }
 
-    Transaction transaction(writer.context(), "Select Layer Boundaries", DoesntModifyDocument);
-    transaction.execute(new cmd::SetMask(doc, &newMask));
-    transaction.commit();
+    Tx tx(writer.context(), "Select Layer Boundaries", DoesntModifyDocument);
+    tx(new cmd::SetMask(doc, &newMask));
+    tx.commit();
 
-    doc->resetTransformation();
-    doc->generateMaskBoundaries();
     update_screen_for_document(doc);
   }
   catch (base::Exception& e) {

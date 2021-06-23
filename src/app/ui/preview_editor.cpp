@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -12,6 +13,7 @@
 
 #include "app/app.h"
 #include "app/doc.h"
+#include "app/doc_event.h"
 #include "app/ini_file.h"
 #include "app/loop_tag.h"
 #include "app/modules/editors.h"
@@ -21,11 +23,11 @@
 #include "app/ui/editor/editor_customization_delegate.h"
 #include "app/ui/editor/editor_view.h"
 #include "app/ui/editor/navigate_state.h"
+#include "app/ui/editor/play_state.h"
 #include "app/ui/skin/skin_theme.h"
 #include "app/ui/status_bar.h"
 #include "app/ui/toolbar.h"
 #include "app/ui_context.h"
-#include "base/bind.h"
 #include "doc/sprite.h"
 #include "gfx/rect.h"
 #include "ui/base.h"
@@ -34,7 +36,7 @@
 #include "ui/message.h"
 #include "ui/system.h"
 
-#include "doc/frame_tag.h"
+#include "doc/tag.h"
 
 namespace app {
 
@@ -99,6 +101,7 @@ public:
   void setPlaying(bool state) {
     m_isPlaying = state;
     setupIcons();
+    invalidate();
   }
 
   obs::signal<void()> Popup;
@@ -184,9 +187,9 @@ PreviewEditorWindow::PreviewEditorWindow()
 
   m_isEnabled = get_config_bool("MiniEditor", "Enabled", true);
 
-  m_centerButton->Click.connect(base::Bind<void>(&PreviewEditorWindow::onCenterClicked, this));
-  m_playButton->Click.connect(base::Bind<void>(&PreviewEditorWindow::onPlayClicked, this));
-  m_playButton->Popup.connect(base::Bind<void>(&PreviewEditorWindow::onPopupSpeed, this));
+  m_centerButton->Click.connect([this]{ onCenterClicked(); });
+  m_playButton->Click.connect([this]{ onPlayClicked(); });
+  m_playButton->Popup.connect([this]{ onPopupSpeed(); });
 
   addChild(m_centerButton);
   addChild(m_playButton);
@@ -208,8 +211,7 @@ void PreviewEditorWindow::setPreviewEnabled(bool state)
 
 void PreviewEditorWindow::pressPlayButton()
 {
-  m_playButton->setSelected(
-    !m_playButton->isSelected());
+  m_playButton->setPlaying(!m_playButton->isPlaying());
   onPlayClicked();
 }
 
@@ -231,7 +233,7 @@ bool PreviewEditorWindow::onProcessMessage(ui::Message* msg)
             ui::display_h() - height - StatusBar::instance()->bounds().h - extra,
             width, height));
 
-        load_window_pos(this, "MiniEditor");
+        load_window_pos(this, "MiniEditor", false);
         invalidate();
       }
       break;
@@ -395,28 +397,7 @@ void PreviewEditorWindow::updateUsingEditor(Editor* editor)
     miniEditor->setFrame(editor->frame());
   }
   else {
-    if (miniEditor->isPlaying()) {
-      doc::FrameTag* tag = editor
-        ->getCustomizationDelegate()
-        ->getFrameTagProvider()
-        ->getFrameTagByFrame(editor->frame(), true);
-
-      doc::FrameTag* playingTag = editor
-        ->getCustomizationDelegate()
-        ->getFrameTagProvider()
-        ->getFrameTagByFrame(m_refFrame, true);
-
-      if (tag == playingTag)
-        return;
-
-      miniEditor->stop();
-    }
-
-    if (!miniEditor->isPlaying())
-      miniEditor->setFrame(m_refFrame = editor->frame());
-
-    miniEditor->play(Preferences::instance().preview.playOnce(),
-                     Preferences::instance().preview.playAll());
+    adjustPlayingTag();
   }
 }
 
@@ -477,6 +458,12 @@ void PreviewEditorWindow::onPreviewOtherEditor(Editor* editor)
   updateUsingEditor(editor);
 }
 
+void PreviewEditorWindow::onTagChangeEditor(Editor* editor, DocEvent& ev)
+{
+  if (m_playButton->isPlaying())
+    adjustPlayingTag();
+}
+
 void PreviewEditorWindow::hideWindow()
 {
   destroyDocView();
@@ -492,6 +479,36 @@ void PreviewEditorWindow::destroyDocView()
     delete m_docView;
     m_docView = nullptr;
   }
+}
+
+void PreviewEditorWindow::adjustPlayingTag()
+{
+  Editor* editor = m_relatedEditor;
+  if (!editor || !m_docView)
+    return;
+
+  Editor* miniEditor = m_docView->editor();
+
+  if (miniEditor->isPlaying()) {
+    doc::Tag* tag = editor
+      ->getCustomizationDelegate()
+      ->getTagProvider()
+      ->getTagByFrame(editor->frame(), true);
+
+    auto playState = dynamic_cast<PlayState*>(miniEditor->getState().get());
+    doc::Tag* playingTag = (playState ? playState->playingTag(): nullptr);
+
+    if (tag == playingTag)
+      return;
+
+    miniEditor->stop();
+  }
+
+  if (!miniEditor->isPlaying())
+    miniEditor->setFrame(m_refFrame = editor->frame());
+
+  miniEditor->play(Preferences::instance().preview.playOnce(),
+                   Preferences::instance().preview.playAll());
 }
 
 } // namespace app

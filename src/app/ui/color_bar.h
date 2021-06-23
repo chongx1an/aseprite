@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -23,7 +24,6 @@
 #include "ui/box.h"
 #include "ui/button.h"
 #include "ui/splitter.h"
-#include "ui/tooltips.h"
 #include "ui/view.h"
 
 namespace ui {
@@ -58,7 +58,7 @@ namespace app {
 
     static ColorBar* instance() { return m_instance; }
 
-    ColorBar(int align);
+    ColorBar(int align, ui::TooltipManager* tooltipManager);
     ~ColorBar();
 
     void setPixelFormat(PixelFormat pixelFormat);
@@ -116,7 +116,7 @@ namespace app {
     void onFgColorButtonChange(const app::Color& color);
     void onBgColorButtonChange(const app::Color& color);
     void onColorButtonChange(const app::Color& color);
-    void onPickSpectrum(const app::Color& color, ui::MouseButtons buttons);
+    void onPickSpectrum(const app::Color& color, ui::MouseButton button);
     void onReverseColors();
     void onSortBy(doc::SortPaletteBy channel);
     void onGradient();
@@ -125,7 +125,7 @@ namespace app {
     void setAscending(bool ascending);
 
     // PaletteViewDelegate impl
-    void onPaletteViewIndexChange(int index, ui::MouseButtons buttons) override;
+    void onPaletteViewIndexChange(int index, ui::MouseButton button) override;
     void onPaletteViewModification(const doc::Palette* newPalette, PaletteViewModification mod) override;
     void onPaletteViewChangeSize(int boxsize) override;
     void onPaletteViewPasteColors(const Palette* fromPal, const doc::PalettePicks& from, const doc::PalettePicks& to) override;
@@ -156,7 +156,6 @@ namespace app {
 
     class WarningIcon;
 
-    ui::TooltipManager m_tooltips;
     ButtonSet m_buttons;
     std::unique_ptr<PalettePopup> m_palettePopup;
     ui::Splitter m_splitter;
@@ -192,8 +191,9 @@ namespace app {
     obs::scoped_connection m_afterCmdConn;
     obs::scoped_connection m_fgConn;
     obs::scoped_connection m_bgConn;
+    obs::scoped_connection m_sepConn;
     obs::scoped_connection m_appPalChangeConn;
-    ui::MouseButtons m_lastButtons;
+    ui::MouseButton m_lastButton;
 
     // True if we the editing mode is on.
     bool m_editMode;

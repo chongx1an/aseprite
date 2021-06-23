@@ -1,4 +1,5 @@
 // Aseprite UI Library
+// Copyright (C) 2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -14,7 +15,7 @@
 #include "base/replace_string.h"
 #include "base/split_string.h"
 #include "base/string.h"
-#include "she/system.h"
+#include "os/system.h"
 
 #include <cctype>
 #include <cstdlib>
@@ -33,7 +34,7 @@ namespace ui {
 
 namespace {
 
-const char* scancode_to_string[] = { // Same order that she::KeyScancode
+const char* scancode_to_string[] = { // Same order that os::KeyScancode
   nullptr,
   "A",
   "B",
@@ -208,7 +209,7 @@ Accelerator::Accelerator(const std::string& str)
     }
     // F1, F2, ..., F11, F12
     else if (tok[0] == 'f' && (tok.size() <= 3)) {
-      int num = std::strtol(tok.c_str()+1, NULL, 10);
+      int num = std::strtol(tok.c_str()+1, nullptr, 10);
       if ((num >= 1) && (num <= 12))
         m_scancode = (KeyScancode)((int)kKeyF1 + num - 1);
     }
@@ -334,7 +335,7 @@ bool Accelerator::isPressed(KeyModifiers modifiers, KeyScancode scancode, int un
 
 bool Accelerator::isPressed() const
 {
-  she::System* sys = she::instance();
+  os::System* sys = os::instance();
   if (!sys)
     return false;
 
@@ -358,7 +359,7 @@ bool Accelerator::isPressed() const
 
 bool Accelerator::isLooselyPressed() const
 {
-  she::System* sys = she::instance();
+  os::System* sys = os::instance();
   if (!sys)
     return false;
 

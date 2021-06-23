@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2021  Igara Studio S.A.
 // Copyright (C) 2016-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -12,15 +13,18 @@
 
 #include "app/ui/color_selector.h"
 
+#include "app/app.h"
+#include "app/color_spaces.h"
 #include "app/color_utils.h"
 #include "app/modules/gfx.h"
 #include "app/ui/skin/skin_theme.h"
 #include "app/ui/status_bar.h"
+#include "base/clamp.h"
 #include "base/concurrent_queue.h"
 #include "base/scoped_value.h"
 #include "base/thread.h"
-#include "she/surface.h"
-#include "she/system.h"
+#include "os/surface.h"
+#include "os/system.h"
 #include "ui/manager.h"
 #include "ui/message.h"
 #include "ui/paint_event.h"
@@ -29,6 +33,7 @@
 #include "ui/size_hint_event.h"
 #include "ui/system.h"
 
+#include <algorithm>
 #include <cmath>
 #include <condition_variable>
 #include <thread>
@@ -96,18 +101,24 @@ public:
     }
   }
 
-  she::Surface* getCanvas(int w, int h, gfx::Color bgColor) {
+  os::Surface* getCanvas(int w, int h, gfx::Color bgColor) {
     assert_ui_thread();
+
+    auto activeCS = get_current_color_space();
 
     if (!m_canvas ||
         m_canvas->width() != w ||
-        m_canvas->height() != h) {
+        m_canvas->height() != h ||
+        m_canvas->colorSpace() != activeCS) {
       std::unique_lock<std::mutex> lock(m_mutex);
       stopCurrentPainting(lock);
 
       auto oldCanvas = m_canvas;
-      m_canvas = she::instance()->createSurface(w, h);
-      m_canvas->fillRect(bgColor, gfx::Rect(0, 0, w, h));
+      m_canvas = os::instance()->createSurface(w, h, activeCS);
+      os::Paint paint;
+      paint.color(bgColor);
+      paint.style(os::Paint::Fill);
+      m_canvas->drawRect(gfx::Rect(0, 0, w, h), paint);
       if (oldCanvas) {
         m_canvas->drawSurface(oldCanvas, 0, 0);
         oldCanvas->dispose();
@@ -200,7 +211,7 @@ private:
   std::mutex m_mutex;
   std::condition_variable m_paintingCV;
   std::condition_variable m_waitStopCV;
-  she::Surface* m_canvas;
+  os::Surface* m_canvas;
   ColorSelector* m_colorSelector;
   ui::Manager* m_manager;
   gfx::Rect m_mainBounds;
@@ -215,12 +226,14 @@ ColorSelector::ColorSelector()
   : Widget(kGenericWidget)
   , m_paintFlags(AllAreasFlag)
   , m_lockColor(false)
-  , m_capturedInBottom(false)
-  , m_capturedInAlpha(false)
   , m_timer(100, this)
 {
   initTheme();
   painter.addRef();
+
+  m_appConn = App::instance()
+    ->ColorSpaceChange.connect(
+      &ColorSelector::updateColorSpace, this);
 }
 
 ColorSelector::~ColorSelector()
@@ -247,7 +260,7 @@ app::Color ColorSelector::getColorByPosition(const gfx::Point& pos)
     return app::Color::fromMask();
 
   const int u = pos.x - rc.x;
-  const int umax = MAX(1, rc.w-1);
+  const int umax = std::max(1, rc.w-1);
 
   const gfx::Rect bottomBarBounds = this->bottomBarBounds();
   if (( hasCapture() && m_capturedInBottom) ||
@@ -260,7 +273,7 @@ app::Color ColorSelector::getColorByPosition(const gfx::Point& pos)
     return getAlphaBarColor(u, umax);
 
   const int v = pos.y - rc.y;
-  const int vmax = MAX(1, rc.h-bottomBarBounds.h-alphaBarBounds.h-1);
+  const int vmax = std::max(1, rc.h-bottomBarBounds.h-alphaBarBounds.h-1);
   return getMainAreaColor(u, umax,
                           v, vmax);
 }
@@ -269,7 +282,7 @@ app::Color ColorSelector::getAlphaBarColor(const int u, const int umax)
 {
   int alpha = (255 * u / umax);
   app::Color color = m_color;
-  color.setAlpha(MID(0, alpha, 255));
+  color.setAlpha(base::clamp(alpha, 0, 255));
   return color;
 }
 
@@ -297,6 +310,9 @@ bool ColorSelector::onProcessMessage(ui::Message* msg)
       if (msg->type() == kMouseDownMessage) {
         m_capturedInBottom = bottomBarBounds().contains(pos);
         m_capturedInAlpha = alphaBarBounds().contains(pos);
+        m_capturedInMain = (hasCapture() &&
+                            !m_capturedInMain &&
+                            !m_capturedInBottom);
       }
 
       app::Color color = getColorByPosition(pos);
@@ -305,7 +321,7 @@ bool ColorSelector::onProcessMessage(ui::Message* msg)
 
         StatusBar::instance()->showColor(0, "", color);
         if (hasCapture())
-          ColorChange(color, mouseMsg->buttons());
+          ColorChange(color, mouseMsg->button());
       }
       break;
     }
@@ -314,6 +330,7 @@ bool ColorSelector::onProcessMessage(ui::Message* msg)
       if (hasCapture()) {
         m_capturedInBottom = false;
         m_capturedInAlpha = false;
+        m_capturedInMain = false;
         releaseMouse();
       }
       return true;
@@ -351,7 +368,7 @@ bool ColorSelector::onProcessMessage(ui::Message* msg)
               newHue,
               m_color.getHsvSaturation(),
               m_color.getHsvValue(),
-              m_color.getAlpha());
+              getCurrentAlphaForNewColor());
 
           ColorChange(newColor, kButtonNone);
         }
@@ -373,8 +390,10 @@ bool ColorSelector::onProcessMessage(ui::Message* msg)
 
 void ColorSelector::onInitTheme(ui::InitThemeEvent& ev)
 {
+  SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
+
   Widget::onInitTheme(ev);
-  setBorder(gfx::Border(3*ui::guiscale()));
+  setBorder(theme->calcBorder(this, theme->styles.editorView()));
 }
 
 void ColorSelector::onResize(ui::ResizeEvent& ev)
@@ -440,7 +459,7 @@ void ColorSelector::onPaintAlphaBar(ui::Graphics* g, const gfx::Rect& rc)
 }
 
 void ColorSelector::onPaintSurfaceInBgThread(
-  she::Surface* s,
+  os::Surface* s,
   const gfx::Rect& main,
   const gfx::Rect& bottom,
   const gfx::Rect& alpha,
@@ -466,7 +485,7 @@ void ColorSelector::paintColorIndicator(ui::Graphics* g,
                                         const bool white)
 {
   SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
-  she::Surface* icon = theme->parts.colorWheelIndicator()->bitmap(0);
+  os::Surface* icon = theme->parts.colorWheelIndicator()->bitmap(0);
 
   g->drawColoredRgbaSurface(
     icon,
@@ -475,10 +494,19 @@ void ColorSelector::paintColorIndicator(ui::Graphics* g,
     pos.y-icon->height()/2);
 }
 
+int ColorSelector::getCurrentAlphaForNewColor() const
+{
+  if (m_color.getType() != Color::MaskType)
+    return m_color.getAlpha();
+  else
+    return 255;
+}
+
 gfx::Rect ColorSelector::bottomBarBounds() const
 {
+  SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
   const gfx::Rect rc = childrenBounds();
-  const int size = 8*guiscale();      // TODO 8 should be configurable in theme.xml
+  const int size = theme->dimensions.colorSelectorBarSize();
   if (rc.h > 2*size) {
     if (rc.h > 3*size)          // Alpha bar is visible too
       return gfx::Rect(rc.x, rc.y2()-size*2, rc.w, size);
@@ -491,12 +519,19 @@ gfx::Rect ColorSelector::bottomBarBounds() const
 
 gfx::Rect ColorSelector::alphaBarBounds() const
 {
+  SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
   const gfx::Rect rc = childrenBounds();
-  const int size = 8*guiscale();      // TODO 8 should be configurable in theme.xml
+  const int size = theme->dimensions.colorSelectorBarSize();
   if (rc.h > 3*size)
     return gfx::Rect(rc.x, rc.y2()-size, rc.w, size);
   else
     return gfx::Rect();
+}
+
+void ColorSelector::updateColorSpace()
+{
+  m_paintFlags |= AllAreasFlag;
+  invalidate();
 }
 
 } // namespace app

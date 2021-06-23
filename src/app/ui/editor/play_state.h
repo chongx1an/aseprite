@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2020-2021  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
@@ -15,7 +16,7 @@
 #include "ui/timer.h"
 
 namespace doc {
-  class FrameTag;
+  class Tag;
 }
 
 namespace app {
@@ -27,14 +28,18 @@ namespace app {
     PlayState(const bool playOnce,
               const bool playAll);
 
+    doc::Tag* playingTag() const;
+
     void onEnterState(Editor* editor) override;
     LeaveAction onLeaveState(Editor* editor, EditorState* newState) override;
+    void onBeforePopState(Editor* editor) override;
     bool onMouseDown(Editor* editor, ui::MouseMessage* msg) override;
     bool onMouseUp(Editor* editor, ui::MouseMessage* msg) override;
     bool onMouseMove(Editor* editor, ui::MouseMessage* msg) override;
     bool onKeyDown(Editor* editor, ui::KeyMessage* msg) override;
     bool onKeyUp(Editor* editor, ui::KeyMessage* msg) override;
     bool onSetCursor(Editor* editor, const gfx::Point& mouseScreenPos) override;
+    void onRemoveTag(Editor* editor, doc::Tag* tag) override;
 
   private:
     void onPlaybackTick();
@@ -57,7 +62,7 @@ namespace app {
 
     bool m_pingPongForward;
     doc::frame_t m_refFrame;
-    doc::FrameTag* m_tag;
+    doc::Tag* m_tag;
 
     obs::scoped_connection m_ctxConn;
   };

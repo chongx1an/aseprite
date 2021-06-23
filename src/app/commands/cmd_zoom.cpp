@@ -29,7 +29,6 @@ public:
   enum class Focus { Default, Mouse, Center };
 
   ZoomCommand();
-  Command* clone() const override { return new ZoomCommand(*this); }
 
 protected:
   bool onNeedsParams() const override { return true; }
@@ -85,7 +84,7 @@ void ZoomCommand::onExecute(Context* context)
 
   // Try to use the editor above the mouse.
   ui::Widget* pick = ui::Manager::getDefault()->pick(mousePos);
-  if (pick && pick->type() == editor_type())
+  if (pick && pick->type() == Editor::Type())
     editor = static_cast<Editor*>(pick);
 
   render::Zoom zoom = editor->zoom();

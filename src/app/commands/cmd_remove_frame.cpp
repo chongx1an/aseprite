@@ -1,5 +1,6 @@
 // Aseprite
-// Copyright (C) 2001-2017  David Capello
+// Copyright (C) 2020  Igara Studio S.A.
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -13,7 +14,7 @@
 #include "app/context_access.h"
 #include "app/doc_api.h"
 #include "app/modules/gui.h"
-#include "app/transaction.h"
+#include "app/tx.h"
 #include "doc/sprite.h"
 #include "ui/ui.h"
 
@@ -22,7 +23,6 @@ namespace app {
 class RemoveFrameCommand : public Command {
 public:
   RemoveFrameCommand();
-  Command* clone() const override { return new RemoveFrameCommand(*this); }
 
 protected:
   bool onEnabled(Context* context) override;
@@ -36,8 +36,12 @@ RemoveFrameCommand::RemoveFrameCommand()
 
 bool RemoveFrameCommand::onEnabled(Context* context)
 {
-  ContextWriter writer(context);
-  Sprite* sprite(writer.sprite());
+  if (!context->checkFlags(ContextFlags::ActiveDocumentIsWritable |
+                           ContextFlags::HasActiveSprite))
+    return false;
+
+  const ContextReader reader(context);
+  const Sprite* sprite(reader.sprite());
   return
     sprite &&
     sprite->totalFrames() > 1;
@@ -49,8 +53,8 @@ void RemoveFrameCommand::onExecute(Context* context)
   Doc* document(writer.document());
   Sprite* sprite(writer.sprite());
   {
-    Transaction transaction(writer.context(), "Remove Frame");
-    DocApi api = document->getApi(transaction);
+    Tx tx(writer.context(), "Remove Frame");
+    DocApi api = document->getApi(tx);
     const Site* site = writer.site();
     if (site->inTimeline() &&
         !site->selectedFrames().empty()) {
@@ -62,7 +66,7 @@ void RemoveFrameCommand::onExecute(Context* context)
       api.removeFrame(sprite, writer.frame());
     }
 
-    transaction.commit();
+    tx.commit();
   }
   update_screen_for_document(document);
 }

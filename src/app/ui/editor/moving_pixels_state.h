@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2019-2021  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
@@ -14,7 +15,9 @@
 #include "app/ui/editor/pixels_movement.h"
 #include "app/ui/editor/standby_state.h"
 #include "app/ui/status_bar.h"
+#include "app/ui/timeline/timeline_observer.h"
 #include "obs/connection.h"
+#include "ui/timer.h"
 
 namespace doc {
   class Image;
@@ -27,17 +30,24 @@ namespace app {
   class MovingPixelsState
     : public StandbyState
     , EditorObserver
+    , TimelineObserver
     , ContextBarObserver {
   public:
     MovingPixelsState(Editor* editor, ui::MouseMessage* msg, PixelsMovementPtr pixelsMovement, HandleType handle);
     virtual ~MovingPixelsState();
 
+    bool canHandleFrameChange() const {
+      return m_pixelsMovement->canHandleFrameChange();
+    }
+
     void translate(const gfx::Point& delta);
     void rotate(double angle);
     void flip(doc::algorithm::FlipType flipType);
+    void shift(int dx, int dy);
 
     // EditorState
     virtual void onEnterState(Editor* editor) override;
+    virtual void onEditorGotFocus(Editor* editor) override;
     virtual LeaveAction onLeaveState(Editor* editor, EditorState* newState) override;
     virtual void onActiveToolChange(Editor* editor, tools::Tool* tool) override;
     virtual bool onMouseDown(Editor* editor, ui::MouseMessage* msg) override;
@@ -55,6 +65,9 @@ namespace app {
     virtual void onBeforeFrameChanged(Editor* editor) override;
     virtual void onBeforeLayerChanged(Editor* editor) override;
 
+    // TimelineObserver
+    virtual void onBeforeRangeChanged(Timeline* timeline) override;
+
     // ContextBarObserver
     virtual void onDropPixels(ContextBarObserver::DropAction action) override;
 
@@ -62,6 +75,7 @@ namespace app {
 
   private:
     void onTransparentColorChange();
+    void onRenderTimer();
 
     // ContextObserver
     void onBeforeCommandExecution(CommandExecutionEvent& ev);
@@ -83,6 +97,13 @@ namespace app {
     // True if the image was discarded (e.g. when a "Cut" command was
     // used to remove the dragged image).
     bool m_discarded;
+
+    ui::Timer m_renderTimer;
+
+    // Position of the mouse in the canvas to avoid redrawing when the
+    // mouse position changes (only we redraw when the canvas position
+    // changes).
+    gfx::Point m_oldSpritePos;
 
     obs::connection m_ctxConn;
     obs::connection m_opaqueConn;

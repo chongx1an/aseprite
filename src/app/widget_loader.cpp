@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2019-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -26,11 +27,10 @@
 #include "app/widget_not_found.h"
 #include "app/xml_document.h"
 #include "app/xml_exception.h"
-#include "base/bind.h"
 #include "base/exception.h"
 #include "base/fs.h"
 #include "base/memory.h"
-#include "she/system.h"
+#include "os/system.h"
 #include "ui/ui.h"
 
 #include "tinyxml.h"
@@ -39,6 +39,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <memory>
 
 namespace app {
 
@@ -183,7 +184,7 @@ Widget* WidgetLoader::convertXmlElementToWidget(const TiXmlElement* elem, Widget
 
     if (closewindow) {
       static_cast<Button*>(widget)
-        ->Click.connect(base::Bind<void>(&Widget::closeWindow, widget));
+        ->Click.connect([widget]{ widget->closeWindow(); });
     }
   }
   else if (elem_name == "check") {
@@ -202,9 +203,10 @@ Widget* WidgetLoader::convertXmlElementToWidget(const TiXmlElement* elem, Widget
       if (!widget) {
         // Automatic bind <check> widget with bool preference option
         if (pref) {
-          auto prefWidget = new BoolPrefWidget<CheckBox>("");
+          std::unique_ptr<BoolPrefWidget<CheckBox>> prefWidget(
+            new BoolPrefWidget<CheckBox>(""));
           prefWidget->setPref(pref);
-          widget = prefWidget;
+          widget = prefWidget.release();
         }
         else {
           widget = new CheckBox("");
@@ -451,9 +453,10 @@ Widget* WidgetLoader::convertXmlElementToWidget(const TiXmlElement* elem, Widget
       widget = new ButtonSet(strtol(columns, NULL, 10));
 
     if (ButtonSet* buttonset = dynamic_cast<ButtonSet*>(widget)) {
-      bool multiple = bool_attr_is_true(elem, "multiple");
-      if (multiple)
-        buttonset->setMultipleSelection(multiple);
+      if (bool_attr_is_true(elem, "multiple"))
+        buttonset->setMultiMode(ButtonSet::MultiMode::Set);
+      if (bool_attr_is_true(elem, "oneormore"))
+        buttonset->setMultiMode(ButtonSet::MultiMode::OneOrMore);
     }
   }
   else if (elem_name == "item") {
@@ -494,7 +497,7 @@ Widget* WidgetLoader::convertXmlElementToWidget(const TiXmlElement* elem, Widget
         throw base::Exception("File %s not found", file);
 
       try {
-        she::Surface* sur = she::instance()->loadRgbaSurface(rf.filename().c_str());
+        os::Surface* sur = os::instance()->loadRgbaSurface(rf.filename().c_str());
         widget = new ImageView(sur, 0, true);
       }
       catch (...) {
@@ -565,7 +568,12 @@ void WidgetLoader::fillWidgetWithXmlElementAttributes(const TiXmlElement* elem, 
       else if (strcmp(tooltip_dir, "right") == 0) dir = RIGHT;
     }
 
-    m_tooltipManager->addTooltipFor(widget, m_xmlTranslator(elem, "tooltip"), dir);
+    Widget* widgetWithTooltip;
+    if (widget->type() == ui::kComboBoxWidget)
+      widgetWithTooltip = static_cast<ComboBox*>(widget)->getEntryWidget();
+    else
+      widgetWithTooltip = widget;
+    m_tooltipManager->addTooltipFor(widgetWithTooltip, m_xmlTranslator(elem, "tooltip"), dir);
   }
 
   if (selected)

@@ -1,5 +1,6 @@
 // Aseprite
-// Copyright (C) 2001-2017  David Capello
+// Copyright (C) 2019-2020  Igara Studio S.A.
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -12,7 +13,7 @@
 #include "app/commands/command.h"
 #include "app/context_access.h"
 #include "app/modules/gui.h"
-#include "app/transaction.h"
+#include "app/tx.h"
 #include "doc/mask.h"
 #include "doc/sprite.h"
 
@@ -21,7 +22,6 @@ namespace app {
 class ReselectMaskCommand : public Command {
 public:
   ReselectMaskCommand();
-  Command* clone() const override { return new ReselectMaskCommand(*this); }
 
 protected:
   bool onEnabled(Context* context) override;
@@ -35,8 +35,12 @@ ReselectMaskCommand::ReselectMaskCommand()
 
 bool ReselectMaskCommand::onEnabled(Context* context)
 {
-  ContextWriter writer(context);
-  Doc* document(writer.document());
+  if (!context->checkFlags(ContextFlags::ActiveDocumentIsWritable |
+                           ContextFlags::HasActiveSprite))
+    return false;
+
+  const ContextReader reader(context);
+  const Doc* document(reader.document());
   return
      document &&                      // The document does exist
     !document->isMaskVisible() &&     // The mask is hidden
@@ -49,12 +53,11 @@ void ReselectMaskCommand::onExecute(Context* context)
   ContextWriter writer(context);
   Doc* document(writer.document());
   {
-    Transaction transaction(writer.context(), "Reselect", DoesntModifyDocument);
-    transaction.execute(new cmd::ReselectMask(document));
-    transaction.commit();
+    Tx tx(writer.context(), "Reselect", DoesntModifyDocument);
+    tx(new cmd::ReselectMask(document));
+    tx.commit();
   }
 
-  document->generateMaskBoundaries();
   update_screen_for_document(document);
 }
 

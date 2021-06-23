@@ -1,4 +1,5 @@
 # Aseprite Document Library
+# Copyright (C) 2020 Igara Studio S.A.
 # Copyright (C) 2001-2018 David Capello
 
 if(WIN32)
@@ -28,16 +29,14 @@ add_library(doc-lib
   cel_data_io.cpp
   cel_io.cpp
   cels_range.cpp
+  color.cpp
   compressed_image.cpp
-  conversion_she.cpp
   document.cpp
+  file/act_file.cpp
   file/col_file.cpp
   file/gpl_file.cpp
   file/hex_file.cpp
   file/pal_file.cpp
-  frame_tag.cpp
-  frame_tag_io.cpp
-  frame_tags.cpp
   handle_anidir.cpp
   image.cpp
   image_impl.cpp
@@ -65,12 +64,12 @@ add_library(doc-lib
   sprites.cpp
   string_io.cpp
   subobjects_io.cpp
+  tag.cpp
+  tag_io.cpp
+  tags.cpp
   user_data_io.cpp)
 
-# TODO Remove 'she' as dependency and move conversion_she.cpp/h files
-#      to other library/layer (render-lib? new conversion-lib?)
 target_link_libraries(doc-lib
-  she
-  gfx-lib
-  fixmath-lib
-  laf-base)
+  laf-gfx
+  laf-base
+  fixmath-lib)

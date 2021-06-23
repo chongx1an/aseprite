@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2020  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
@@ -25,7 +26,6 @@ namespace app {
 class ScrollCommand : public Command {
 public:
   ScrollCommand();
-  Command* clone() const override { return new ScrollCommand(*this); }
 
 protected:
   bool onNeedsParams() const override { return true; }
@@ -50,8 +50,7 @@ void ScrollCommand::onLoadParams(const Params& params)
 
 bool ScrollCommand::onEnabled(Context* context)
 {
-  ContextWriter writer(context);
-  return (writer.document() != NULL);
+  return context->checkFlags(ContextFlags::HasActiveDocument);
 }
 
 void ScrollCommand::onExecute(Context* context)

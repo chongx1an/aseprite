@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
@@ -12,9 +13,8 @@
 
 #include "app/modules/gui.h"
 #include "app/ui/skin/skin_theme.h"
-#include "base/bind.h"
 #include "gfx/color.h"
-#include "she/surface.h"
+#include "os/surface.h"
 #include "ui/box.h"
 #include "ui/button.h"
 #include "ui/graphics.h"
@@ -25,6 +25,7 @@
 #include "ui/theme.h"
 #include "ui/widget.h"
 
+#include <algorithm>
 #include <cstdarg>
 
 namespace app {
@@ -145,7 +146,7 @@ void ButtonSet::Item::onPaint(ui::PaintEvent& ev)
   }
 
   if (m_icon) {
-    she::Surface* bmp = m_icon->bitmap(0);
+    os::Surface* bmp = m_icon->bitmap(0);
 
     if (isSelected() && hasCapture())
       g->drawColoredRgbaSurface(bmp, theme->colors.buttonSelectedText(),
@@ -263,8 +264,8 @@ void ButtonSet::Item::onSizeHint(ui::SizeHintEvent& ev)
   gfx::Size iconSize;
   if (m_icon) {
     iconSize = m_icon->size();
-    iconSize.w = MAX(iconSize.w, 16*guiscale());
-    iconSize.h = MAX(iconSize.h, 16*guiscale());
+    iconSize.w = std::max(iconSize.w, 16*guiscale());
+    iconSize.h = std::max(iconSize.h, 16*guiscale());
   }
 
   gfx::Rect boxRc;
@@ -298,7 +299,7 @@ ButtonSet::ButtonSet(int columns)
   : Grid(columns, false)
   , m_offerCapture(true)
   , m_triggerOnMouseUp(false)
-  , m_multipleSelection(false)
+  , m_multiMode(MultiMode::One)
 {
   InitTheme.connect(
     [this]{
@@ -356,6 +357,15 @@ int ButtonSet::selectedItem() const
   return -1;
 }
 
+int ButtonSet::countSelectedItems() const
+{
+  int count = 0;
+  for (auto child : children())
+    if (child->isSelected())
+      ++count;
+  return count;
+}
+
 void ButtonSet::setSelectedItem(int index, bool focusItem)
 {
   if (index >= 0 && index < (int)children().size())
@@ -371,16 +381,38 @@ void ButtonSet::setSelectedItem(Item* item, bool focusItem)
 
 void ButtonSet::onSelectItem(Item* item, bool focusItem, ui::Message* msg)
 {
-  if (!m_multipleSelection) {
-    if (item && item->isSelected())
+  const int count = countSelectedItems();
+
+  if ((m_multiMode == MultiMode::One) ||
+      (m_multiMode == MultiMode::OneOrMore &&
+       msg &&
+       !msg->shiftPressed() &&
+       !msg->altPressed() &&
+       !msg->ctrlPressed() &&
+       !msg->cmdPressed())) {
+    if (item && item->isSelected() &&
+        ((m_multiMode == MultiMode::One) ||
+         (m_multiMode == MultiMode::OneOrMore && count == 1)))
       return;
 
-    Item* sel = findSelectedItem();
-    if (sel)
-      sel->setSelected(false);
+    if (m_multiMode == MultiMode::One) {
+      if (auto sel = findSelectedItem())
+        sel->setSelected(false);
+    }
+    else if (m_multiMode == MultiMode::OneOrMore) {
+      for (auto child : children())
+        child->setSelected(false);
+    }
   }
 
   if (item) {
+    if (m_multiMode == MultiMode::OneOrMore) {
+      // Item already selected
+      if (count == 1 && item == findSelectedItem())
+        return;
+    }
+
+    // Toggle item
     item->setSelected(!item->isSelected());
     if (focusItem)
       item->requestFocus();
@@ -404,9 +436,9 @@ void ButtonSet::setTriggerOnMouseUp(bool state)
   m_triggerOnMouseUp = state;
 }
 
-void ButtonSet::setMultipleSelection(bool state)
+void ButtonSet::setMultiMode(MultiMode mode)
 {
-  m_multipleSelection = state;
+  m_multiMode = mode;
 }
 
 void ButtonSet::onItemChange(Item* item)

@@ -1,4 +1,5 @@
 // Aseprite UI Library
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -7,28 +8,6 @@
 #ifndef UI_BASE_H_INCLUDED
 #define UI_BASE_H_INCLUDED
 #pragma once
-
-// Get the system's definition of NULL
-#include <stddef.h>
-
-#ifndef TRUE
-  #define TRUE         (-1)
-  #define FALSE        (0)
-#endif
-
-#undef MIN
-#undef MAX
-#undef MID
-
-#define MIN(x,y)     (((x) < (y)) ? (x) : (y))
-#define MAX(x,y)     (((x) > (y)) ? (x) : (y))
-#define MID(x,y,z)   MAX((x), MIN((y), (z)))
-
-#undef ABS
-#define ABS(x)       (((x) >= 0) ? (x) : (-(x)))
-
-#undef SGN
-#define SGN(x)       (((x) >= 0) ? 1 : -1)
 
 namespace ui {
 
@@ -50,7 +29,8 @@ namespace ui {
     DOUBLE_BUFFERED  = 0x00002000, // The widget is painted in a back-buffer and then flipped to the main display
     TRANSPARENT      = 0x00004000, // The widget has transparent parts that needs the background painted before
     CTRL_RIGHT_CLICK = 0x00008000, // The widget should transform Ctrl+click to right-click on OS X.
-    PROPERTIES_MASK  = 0x0000ffff,
+    IGNORE_MOUSE     = 0x80000000, // Don't process mouse messages for this widget (useful for labels, boxes, grids, etc.)
+    PROPERTIES_MASK  = 0x8000ffff,
 
     HORIZONTAL       = 0x00010000,
     VERTICAL         = 0x00020000,
@@ -62,7 +42,8 @@ namespace ui {
     BOTTOM           = 0x00800000,
     HOMOGENEOUS      = 0x01000000,
     WORDWRAP         = 0x02000000,
-    ALIGN_MASK       = 0xffff0000,
+    CHARWRAP         = 0x04000000,
+    ALIGN_MASK       = 0x7fff0000,
   };
 
 } // namespace ui

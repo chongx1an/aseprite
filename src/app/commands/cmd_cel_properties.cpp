@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -17,11 +18,10 @@
 #include "app/doc_event.h"
 #include "app/doc_range.h"
 #include "app/modules/gui.h"
-#include "app/transaction.h"
+#include "app/tx.h"
 #include "app/ui/timeline/timeline.h"
 #include "app/ui/user_data_popup.h"
 #include "app/ui_context.h"
-#include "base/bind.h"
 #include "base/mem_utils.h"
 #include "base/scoped_value.h"
 #include "doc/cel.h"
@@ -50,9 +50,9 @@ public:
     , m_cel(nullptr)
     , m_selfUpdate(false)
     , m_newUserData(false) {
-    opacity()->Change.connect(base::Bind<void>(&CelPropertiesWindow::onStartTimer, this));
-    userData()->Click.connect(base::Bind<void>(&CelPropertiesWindow::onPopupUserData, this));
-    m_timer.Tick.connect(base::Bind<void>(&CelPropertiesWindow::onCommitChange, this));
+    opacity()->Change.connect([this]{ onStartTimer(); });
+    userData()->Click.connect([this]{ onPopupUserData(); });
+    m_timer.Tick.connect([this]{ onCommitChange(); });
 
     remapWindow();
     centerWindow();
@@ -167,7 +167,7 @@ private:
                                  m_userData != m_cel->data()->userData()))) {
       try {
         ContextWriter writer(UIContext::instance());
-        Transaction transaction(writer.context(), "Set Cel Properties");
+        Tx tx(writer.context(), "Set Cel Properties");
 
         DocRange range;
         if (m_range.enabled())
@@ -181,12 +181,12 @@ private:
         for (Cel* cel : sprite->uniqueCels(range.selectedFrames())) {
           if (range.contains(cel->layer())) {
             if (!cel->layer()->isBackground() && newOpacity != cel->opacity()) {
-              transaction.execute(new cmd::SetCelOpacity(cel, newOpacity));
+              tx(new cmd::SetCelOpacity(cel, newOpacity));
             }
 
             if (m_newUserData &&
                 m_userData != cel->data()->userData()) {
-              transaction.execute(new cmd::SetUserData(cel->data(), m_userData));
+              tx(new cmd::SetUserData(cel->data(), m_userData));
 
               // Redraw timeline because the cel's user data/color
               // might have changed.
@@ -195,7 +195,7 @@ private:
           }
         }
 
-        transaction.commit();
+        tx.commit();
       }
       catch (const std::exception& e) {
         Console::showException(e);
@@ -230,6 +230,11 @@ private:
   }
 
   // DocObserver impl
+  void onBeforeRemoveCel(DocEvent& ev) override {
+    if (m_cel == ev.cel())
+      setCel(m_document, nullptr);
+  }
+
   void onCelOpacityChange(DocEvent& ev) override {
     if (m_cel == ev.cel())
       updateFromCel();
@@ -273,7 +278,6 @@ private:
 class CelPropertiesCommand : public Command {
 public:
   CelPropertiesCommand();
-  Command* clone() const override { return new CelPropertiesCommand(*this); }
 
 protected:
   bool onEnabled(Context* context) override;

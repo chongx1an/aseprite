@@ -1,5 +1,6 @@
 <!-- Aseprite -->
-<!-- Copyright (C) 2001-2018 by David Capello -->
+<!-- Copyright (C) 2018-2021  Igara Studio S.A. -->
+<!-- Copyright (C) 2001-2018  David Capello -->
 <gui>
   <window id="options" text="@.title">
   <vbox>
@@ -7,7 +8,9 @@
       <view maxsize="true">
         <listbox id="section_listbox">
           <listitem text="@.section_general" value="section_general" />
+          <listitem text="@.section_tablet" value="section_tablet" />
           <listitem text="@.section_files" value="section_files" />
+          <listitem text="@.section_color" value="section_color" />
           <listitem text="@.section_alerts" value="section_alerts" />
           <listitem text="@.section_editor" value="section_editor" />
           <listitem text="@.section_selection" value="section_selection" />
@@ -61,30 +64,38 @@
           <check id="expand_menubar_on_mouseover"
                  text="@.expand_menu_bar_items_on_mouseover"
                  tooltip="@.expand_menu_bar_items_on_mouseover" />
-          <hbox>
-            <check id="enable_data_recovery"
-                   text="@.auto_save_recovery_data"
-                   tooltip="@.auto_save_recovery_data_tooltip" />
-            <combobox id="data_recovery_period">
-              <listitem text="@.10_seconds" value="0.33" />
-              <listitem text="@.30_seconds" value="0.5" />
-              <listitem text="@.1_minute" value="1" />
-              <listitem text="@.2_minutes" value="2" />
-              <listitem text="@.5_minutes" value="5" />
-              <listitem text="@.10_minutes" value="10" />
-              <listitem text="@.15_minutes" value="15" />
-              <listitem text="@.30_minutes" value="30" />
-            </combobox>
-          </hbox>
+          <check id="color_bar_entries_separator"
+                 text="@.color_bar_entries_separator"
+                 tooltip="@.color_bar_entries_separator"
+                 pref="color_bar.entries_separator" />
+
           <separator horizontal="true" />
           <link id="locate_file" text="@.locate_file" />
           <link id="locate_crash_folder" text="@.locate_crash_folder" />
         </vbox>
 
+        <!-- Tablet -->
+        <vbox id="section_tablet">
+          <separator text="@.section_tablet" horizontal="true" />
+          <radio id="tablet_api_windows_pointer" text="@.tablet_api_windows_pointer" group="1" />
+          <radio id="tablet_api_wintab_system" text="@.tablet_api_wintab_system" group="1" />
+          <radio id="tablet_api_wintab_direct" text="@.tablet_api_wintab_direct" group="1" />
+          <separator horizontal="true" />
+          <check id="one_finger_as_mouse_movement"
+                 text="@.one_finger_as_mouse_movement"
+                 tooltip="@.one_finger_as_mouse_movement_tooltip"
+                 pref="experimental.one_finger_as_mouse_movement" />
+          <hbox>
+            <check id="load_wintab_driver"
+                   text="@.load_wintab_driver"
+                   tooltip="@.load_wintab_driver_tooltip" />
+            <link text="@.wintab_more_info" url="https://www.aseprite.org/docs/wintab/" />
+          </hbox>
+        </vbox>
+
         <!-- Files -->
         <vbox id="section_files">
           <separator text="@.section_files" horizontal="true" />
-
           <label text="@.default_extension_for" />
           <grid columns="2">
             <label text="@.save_default_extension" />
@@ -112,6 +123,93 @@
                    text="@.show_full_path"
                    tooltip="@.show_full_path_tooltip" />
           </grid>
+
+          <separator text="@.recover_files" horizontal="true" />
+          <grid columns="2">
+            <check id="enable_data_recovery"
+                   text="@.auto_save_recovery_data"
+                   tooltip="@.auto_save_recovery_data_tooltip" />
+            <combobox id="data_recovery_period">
+              <listitem text="@.10_seconds" value="0.1667" />
+              <listitem text="@.30_seconds" value="0.5" />
+              <listitem text="@.1_minute" value="1" />
+              <listitem text="@.2_minutes" value="2" />
+              <listitem text="@.5_minutes" value="5" />
+              <listitem text="@.10_minutes" value="10" />
+              <listitem text="@.15_minutes" value="15" />
+              <listitem text="@.30_minutes" value="30" />
+            </combobox>
+            <check id="keep_edited_sprite_data"
+                   text="@.keep_edited_sprite_data"
+                   tooltip="@.keep_edited_sprite_data_tooltip" />
+            <combobox id="keep_edited_sprite_data_for">
+              <listitem text="@.1_day" value="1" />
+              <listitem text="@.2_days" value="2" />
+              <listitem text="@.3_days" value="3" />
+              <listitem text="@.1_week" value="7" />
+              <listitem text="@.2_weeks" value="14" />
+              <listitem text="@.1_month" value="30" />
+            </combobox>
+            <check id="keep_closed_sprite_on_memory"
+                   text="@.keep_closed_sprite_on_memory"
+                   tooltip="@.keep_closed_sprite_on_memory_tooltip" />
+            <combobox id="keep_closed_sprite_on_memory_for">
+              <listitem text="@.10_seconds" value="0.1667" />
+              <listitem text="@.30_seconds" value="0.5" />
+              <listitem text="@.1_minute" value="1" />
+              <listitem text="@.2_minutes" value="2" />
+              <listitem text="@.5_minutes" value="5" />
+              <listitem text="@.10_minutes" value="10" />
+              <listitem text="@.15_minutes" value="15" />
+              <listitem text="@.30_minutes" value="30" />
+              <listitem text="@.1_hour" value="60" />
+              <listitem text="@.4_hours" value="240" />
+              <listitem text="@.8_hours" value="480" />
+            </combobox>
+          </grid>
+
+        </vbox>
+
+        <!-- Color -->
+        <vbox id="section_color">
+          <separator text="@.section_color" horizontal="true" />
+          <check text="@.color_management" id="color_management" pref="color.manage" />
+
+	  <grid columns="2">
+            <label text="@.window_cs" id="window_cs_label" />
+            <combobox id="window_cs">
+              <listitem text="@.use_monitor_cs" />
+              <listitem text="@.use_srgb_cs" />
+              <listitem text="@.use_specific_cs" />
+            </combobox>
+
+            <boxfiller />
+            <separator horizontal="true" />
+
+            <label text="@.working_rgb_cs" id="working_rgb_cs_label" />
+            <combobox id="working_rgb_cs" />
+
+            <label text="@.files_with_cs" id="files_with_cs_label" />
+            <combobox id="files_with_cs">
+              <listitem text="@.disable_cs" />
+              <listitem text="@.use_embedded_cs" />
+              <listitem text="@.convert_cs" />
+              <listitem text="@.assign_cs" />
+              <listitem text="@.ask_cs" />
+	    </combobox>
+
+            <label text="@.missing_cs" id="missing_cs_label" />
+            <combobox id="missing_cs">
+              <listitem text="@.disable_cs" />
+              <listitem text="@.assign_cs" />
+              <listitem text="@.ask_cs" />
+	    </combobox>
+	  </grid>
+
+	  <hbox>
+	    <hbox expansive="true" />
+            <button id="reset_color_management" text="@general.reset" width="60" />
+	  </hbox>
         </vbox>
 
         <!-- Editor -->
@@ -125,6 +223,8 @@
           <check text="@.zoom_from_center_with_keys" id="zoom_from_center_with_keys" />
           <check text="@.show_scrollbars" id="show_scrollbars" tooltip="@.show_scrollbars_tooltip" />
           <check text="@.auto_scroll" id="auto_scroll" />
+          <check text="@.auto_fit" id="auto_fit"
+                 pref="editor.auto_fit" />
           <check text="@.straight_line_preview" id="straight_line_preview" tooltip="@.straight_line_preview_tooltip" />
           <check text="@.discard_brush" id="discard_brush" />
           <hbox>
@@ -142,6 +242,13 @@
           <check text="@.move_edges" id="move_edges" tooltip="@.move_edges_tooltip" />
           <check text="@.modifiers_disable_handles" id="modifiers_disable_handles" tooltip="@.modifiers_disable_handles_tooltip" />
           <check text="@.move_on_add_mode" id="move_on_add_mode" tooltip="@.move_on_add_mode_tooltip" />
+          <check text="@.select_tile_with_double_click" id="select_tile_with_double_click"
+		 pref="selection.doubleclick_select_tile" />
+          <check text="@.force_rotsprite" id="force_rotsprite"
+		 pref="selection.force_rotsprite"/>
+          <check text="@.multicel_when_layers_or_frames" id="multicel_when_layers_or_frames"
+		 tooltip="@.multicel_when_layers_or_frames_tooltip"
+		 pref="selection.multicel_when_layers_or_frames"/>
         </vbox>
 
         <!-- Timeline -->
@@ -151,6 +258,8 @@
 		 pref="general.autoshow_timeline" />
           <check text="@.rewind_on_stop" id="rewind_on_stop" tooltip="@.rewind_on_stop_tooltip"
 		 pref="general.rewind_on_stop" />
+          <check text="@.keep_timeline_selection" id="keep_selection" tooltip="@.keep_timeline_selection_tooltip"
+		 pref="timeline.keep_selection" />
 	  <hbox>
 	    <label text="@.default_first_frame" />
 	    <expr id="first_frame" />
@@ -185,10 +294,12 @@
               <listitem text="@.brush_preview_none" value="0" />
               <listitem text="@.brush_preview_edges" value="1" />
               <listitem text="@.brush_preview_full" value="2" />
+              <listitem text="@.brush_preview_fullall" value="3" />
+              <listitem text="@.brush_preview_fullnedges" value="4" />
             </combobox>
 
 	    <label text="@.cursor_color_type" />
-	    <combobox group="1" id="cursor_color_type">
+	    <combobox id="cursor_color_type">
 	      <listitem text="@.cursor_neg_bw" value="0" />
 	      <listitem text="@.cursor_specific_color" value="1" />
 	    </combobox>
@@ -207,6 +318,8 @@
             <label text="@.bg_size" />
 	    <hbox>
               <combobox id="checked_bg_size" />
+              <expr id="checked_bg_custom_w" />
+              <expr id="checked_bg_custom_h" />
               <check text="@.bg_apply_zoom" id="checked_bg_zoom" />
 	    </hbox>
 
@@ -219,7 +332,7 @@
 
 	  <hbox>
 	    <hbox expansive="true" />
-            <button id="reset_bg" text="@.reset_bg" width="60" />
+            <button id="reset_bg" text="@general.reset" width="60" />
 	  </hbox>
         </vbox>
 
@@ -269,7 +382,7 @@
 
 	  <hbox>
 	    <hbox expansive="true" />
-            <button id="reset_grid" text="@.reset_grid" width="60" />
+            <button id="reset_grid" text="@general.reset" width="60" />
 	  </hbox>
         </vbox>
 
@@ -305,12 +418,22 @@
                    tooltip="@.undo_goto_modified_tooltip" />
             <check id="undo_allow_nonlinear_history"
                    text="@.undo_allow_nonlinear_history" />
+            <check text="@.undo_show_tooltip" id="undo_show_tooltip"
+                   pref="undo.show_tooltip" />
           </vbox>
         </vbox>
 
         <!-- Alerts -->
         <vbox id="section_alerts">
           <separator text="@.section_alerts" horizontal="true" />
+          <hbox>
+            <label text="@.open_sequence_alert" />
+            <combobox id="open_sequence">
+              <listitem text="@.open_sequence_alert_ask" value="0" />
+              <listitem text="@.open_sequence_alert_yes" value="1" />
+              <listitem text="@.open_sequence_alert_no" value="2" />
+            </combobox>
+          </hbox>
           <check id="file_format_doesnt_support_alert" text="@.file_format_doesnt_support_alert"
                  pref="save_file.show_file_format_doesnt_support_alert" />
           <check id="export_animation_in_sequence_alert" text="@.export_animation_in_sequence_alert"
@@ -319,12 +442,20 @@
                  pref="export_file.show_overwrite_files_alert" />
           <check id="overwrite_files_on_export_sprite_sheet_alert" text="@.overwrite_files_on_export_sprite_sheet_alert"
                  pref="sprite_sheet.show_overwrite_files_alert" />
-          <check id="gif_options_alert" text="@.gif_options_alert"
-                 pref="gif.show_alert" />
-          <check id="jpeg_options_alert" text="@.jpeg_options_alert"
-                 pref="jpeg.show_alert" />
           <check id="advanced_mode_alert" text="@.advanced_mode_alert"
                  pref="advanced_mode.show_alert" />
+          <check id="invalid_fg_bg_color_alert" text="@.invalid_fg_bg_color_alert"
+                 pref="color_bar.show_invalid_fg_bg_color_alert" />
+          <check id="run_script_alert" text="@.run_script_alert"
+                 pref="scripts.show_run_script_alert" />
+	  <hbox>
+            <label text="@.image_format_alerts" />
+            <check id="css_options_alert" text="!css" pref="css.show_alert" />
+            <check id="gif_options_alert" text="!gif" pref="gif.show_alert" />
+            <check id="jpeg_options_alert" text="!jpeg" pref="jpeg.show_alert" />
+            <check id="svg_options_alert" text="!svg" pref="svg.show_alert" />
+            <check id="tga_options_alert" text="!tga" pref="tga.show_alert" />
+	  </hbox>
           <separator horizontal="true" />
 	  <hbox>
 	    <hbox expansive="true" />
@@ -368,17 +499,17 @@
                    pref="experimental.new_render_engine" />
             <link text="(#1671)" url="https://github.com/aseprite/aseprite/issues/1671" />
           </hbox>
+          <hbox>
+            <check text="@.new_blend"
+                   pref="experimental.new_blend" />
+            <link text="(#1096)" url="https://github.com/aseprite/aseprite/issues/1096" />
+          </hbox>
           <check id="native_clipboard" text="@.native_clipboard" />
           <check id="native_file_dialog" text="@.native_file_dialog" />
-          <check id="one_finger_as_mouse_movement"
-                 text="@.one_finger_as_mouse_movement"
-                 tooltip="@.one_finger_as_mouse_movement_tooltip"
-                 pref="experimental.one_finger_as_mouse_movement" />
 	  <hbox id="load_wintab_driver_box">
-            <check id="load_wintab_driver"
+            <check id="load_wintab_driver2"
                    text="@.load_wintab_driver"
-                   tooltip="@.load_wintab_driver_tooltip"
-                   pref="experimental.load_wintab_driver" />
+                   tooltip="@.load_wintab_driver_tooltip" />
             <link text="@.wintab_more_info" url="https://www.aseprite.org/docs/wintab/" />
           </hbox>
           <check id="flash_layer" text="@.flash_selected_layer" />

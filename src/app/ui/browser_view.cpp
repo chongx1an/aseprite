@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2021  Igara Studio S.A.
 // Copyright (C) 2016-2017  David Capello
 //
 // This program is distributed under the terms of
@@ -15,11 +16,12 @@
 #include "app/ui/main_window.h"
 #include "app/ui/separator_in_view.h"
 #include "app/ui/skin/skin_theme.h"
+#include "app/ui/status_bar.h"
 #include "app/ui/workspace.h"
 #include "base/file_handle.h"
 #include "base/fs.h"
 #include "base/split_string.h"
-#include "she/font.h"
+#include "os/font.h"
 #include "ui/alert.h"
 #include "ui/link_label.h"
 #include "ui/menu.h"
@@ -88,7 +90,8 @@ public:
     return m_file;
   }
 
-  void loadFile(const std::string& inputFile) {
+  void loadFile(const std::string& inputFile,
+                const std::string& section = std::string()) {
     std::string file = inputFile;
     {
       ResourceFinder rf;
@@ -119,9 +122,8 @@ public:
         cmark_parser_feed(parser, "\n```\n", 5);
 
       cmark_node* root = cmark_parser_finish(parser);
-
       if (root) {
-        processNode(root);
+        processNode(root, section);
         cmark_node_free(root);
       }
       fclose(fp);
@@ -136,6 +138,16 @@ public:
 
     relayout();
     FileChange();
+  }
+
+  void focusSection() {
+    View* view = View::getView(this);
+    if (m_sectionWidget) {
+      int y = m_sectionWidget->bounds().y - bounds().y;
+      view->setViewScroll(gfx::Point(0, y));
+
+      m_sectionWidget = nullptr;
+    }
   }
 
 private:
@@ -263,7 +275,8 @@ private:
       delete firstChild();
   }
 
-  void processNode(cmark_node* root) {
+  void processNode(cmark_node* root,
+                   const std::string& section) {
     clear();
 
     m_content.clear();
@@ -291,8 +304,11 @@ private:
             }
             else {
               m_content += text;
-              if (inHeading)
+              if (inHeading) {
                 closeContent();
+                if (section == text)
+                  m_sectionWidget = lastChild();
+              }
             }
           }
           break;
@@ -495,7 +511,7 @@ private:
       label->Click.connect(
         [this, url]{
           Message* msg = new LoadFileMessage(url);
-          msg->addRecipient(this);
+          msg->setRecipient(this);
           Manager::getDefault()->enqueueMessage(msg);
         });
     }
@@ -518,6 +534,7 @@ private:
 
   std::string m_file;
   std::string m_content;
+  Widget* m_sectionWidget = nullptr;
 };
 
 BrowserView::BrowserView()
@@ -544,9 +561,10 @@ BrowserView::~BrowserView()
   delete m_textBox;
 }
 
-void BrowserView::loadFile(const std::string& file)
+void BrowserView::loadFile(const std::string& file,
+                           const std::string& section)
 {
-  m_textBox->loadFile(file);
+  m_textBox->loadFile(file, section);
 }
 
 std::string BrowserView::getTabText()
@@ -566,6 +584,11 @@ WorkspaceView* BrowserView::cloneWorkspaceView()
 
 void BrowserView::onWorkspaceViewSelected()
 {
+  if (auto statusBar = StatusBar::instance())
+    statusBar->clearText();
+
+  if (m_textBox)
+    m_textBox->focusSection();
 }
 
 bool BrowserView::onCloseView(Workspace* workspace, bool quitting)

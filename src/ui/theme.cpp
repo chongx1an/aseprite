@@ -1,4 +1,5 @@
 // Aseprite UI Library
+// Copyright (C) 2019-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -12,9 +13,9 @@
 
 #include "gfx/point.h"
 #include "gfx/size.h"
-#include "she/font.h"
-#include "she/surface.h"
-#include "she/system.h"
+#include "os/font.h"
+#include "os/surface.h"
+#include "os/system.h"
 #include "ui/intern.h"
 #include "ui/manager.h"
 #include "ui/paint_event.h"
@@ -47,6 +48,10 @@ void for_each_layer(const int flags,
                     const Style* style,
                     std::function<void(const Style::Layer&)> callback)
 {
+  ASSERT(style);
+  if (!style)
+    return;
+
   const Style::Layer* bestLayer = nullptr;
 
   for (const auto& layer : style->layers()) {
@@ -79,7 +84,7 @@ void for_each_layer(const Widget* widget,
 }
 
 std::function<void(int srcx, int srcy, int dstx, int dsty, int w, int h)>
-getDrawSurfaceFunction(Graphics* g, she::Surface* sheet, gfx::Color color)
+getDrawSurfaceFunction(Graphics* g, os::Surface* sheet, gfx::Color color)
 {
   if (color != gfx::ColorNone)
     return [g, sheet, color](int srcx, int srcy, int dstx, int dsty, int w, int h) {
@@ -297,6 +302,10 @@ void Theme::paintLayer(Graphics* g,
                        gfx::Rect& rc,
                        gfx::Color& bgColor)
 {
+  ASSERT(style);
+  if (!style)
+    return;
+
   switch (layer.type()) {
 
     case Style::Layer::Type::kBackground:
@@ -399,7 +408,7 @@ void Theme::paintLayer(Graphics* g,
 
     case Style::Layer::Type::kText:
       if (layer.color() != gfx::ColorNone) {
-        she::Font* oldFont = g->font();
+        os::Font* oldFont = g->font();
         if (style->font())
           g->setFont(style->font());
 
@@ -444,7 +453,7 @@ void Theme::paintLayer(Graphics* g,
       break;
 
     case Style::Layer::Type::kIcon: {
-      she::Surface* icon = layer.icon();
+      os::Surface* icon = layer.icon();
       if (icon) {
         gfx::Size iconSize(icon->width(), icon->height());
         gfx::Point pt;
@@ -481,17 +490,40 @@ gfx::Size Theme::calcSizeHint(const Widget* widget,
 {
   gfx::Size sizeHint;
   gfx::Border borderHint;
-  calcWidgetMetrics(widget, style, sizeHint, borderHint);
+  gfx::Rect textHint;
+  int textAlign;
+  calcWidgetMetrics(widget, style, sizeHint, borderHint,
+                    textHint, textAlign);
   return sizeHint;
+}
+
+void Theme::calcTextInfo(const Widget* widget,
+                         const Style* style,
+                         const gfx::Rect& bounds,
+                         gfx::Rect& textBounds, int& textAlign)
+{
+  gfx::Size sizeHint;
+  gfx::Border borderHint;
+  gfx::Rect textHint;
+  calcWidgetMetrics(widget, style, sizeHint, borderHint,
+                    textHint, textAlign);
+
+  textBounds = bounds;
+  textBounds.shrink(borderHint);
+  textBounds.offset(textHint.origin());
 }
 
 void Theme::measureLayer(const Widget* widget,
                          const Style* style,
                          const Style::Layer& layer,
                          gfx::Border& borderHint,
-                         gfx::Size& textHint, int& textAlign,
+                         gfx::Rect& textHint, int& textAlign,
                          gfx::Size& iconHint, int& iconAlign)
 {
+  ASSERT(style);
+  if (!style)
+    return;
+
   switch (layer.type()) {
 
     case Style::Layer::Type::kBackground:
@@ -514,10 +546,11 @@ void Theme::measureLayer(const Widget* widget,
 
     case Style::Layer::Type::kText:
       if (layer.color() != gfx::ColorNone) {
-        she::Font* font = (style->font() ? style->font(): widget->font());
+        os::Font* font = (style->font() ? style->font(): widget->font());
         gfx::Size textSize(Graphics::measureUITextLength(widget->text(), font),
                            font->height());
 
+        textHint.offset(layer.offset());
         textHint.w = std::max(textHint.w, textSize.w+ABS(layer.offset().x));
         textHint.h = std::max(textHint.h, textSize.h+ABS(layer.offset().y));
         textAlign = layer.align();
@@ -525,7 +558,7 @@ void Theme::measureLayer(const Widget* widget,
       break;
 
     case Style::Layer::Type::kIcon: {
-      she::Surface* icon = layer.icon();
+      os::Surface* icon = layer.icon();
       if (icon) {
         iconHint.w = std::max(iconHint.w, icon->width()+ABS(layer.offset().x));
         iconHint.h = std::max(iconHint.h, icon->height()+ABS(layer.offset().y));
@@ -542,7 +575,10 @@ gfx::Border Theme::calcBorder(const Widget* widget,
 {
   gfx::Size sizeHint;
   gfx::Border borderHint;
-  calcWidgetMetrics(widget, style, sizeHint, borderHint);
+  gfx::Rect textHint;
+  int textAlign;
+  calcWidgetMetrics(widget, style, sizeHint, borderHint,
+                    textHint, textAlign);
   return borderHint;
 }
 
@@ -564,12 +600,12 @@ void Theme::calcSlices(const Widget* widget,
           !layer.slicesBounds().isEmpty()) {
         gfx::Rect sprite = layer.spriteBounds();
         gfx::Rect slices = layer.slicesBounds();
-        topLeft.w = MAX(topLeft.w, slices.x);
-        topLeft.h = MAX(topLeft.h, slices.y);
-        center.w = MAX(center.w, slices.w);
-        center.h = MAX(center.h, slices.h);
-        bottomRight.w = MAX(bottomRight.w, sprite.w - slices.x2());
-        bottomRight.h = MAX(bottomRight.h, sprite.h - slices.y2());
+        topLeft.w = std::max(topLeft.w, slices.x);
+        topLeft.h = std::max(topLeft.h, slices.y);
+        center.w = std::max(center.w, slices.w);
+        center.h = std::max(center.h, slices.h);
+        bottomRight.w = std::max(bottomRight.w, sprite.w - slices.x2());
+        bottomRight.h = std::max(bottomRight.h, sprite.h - slices.y2());
       }
     });
 }
@@ -597,16 +633,21 @@ gfx::Color Theme::calcBgColor(const Widget* widget,
 void Theme::calcWidgetMetrics(const Widget* widget,
                               const Style* style,
                               gfx::Size& sizeHint,
-                              gfx::Border& borderHint)
+                              gfx::Border& borderHint,
+                              gfx::Rect& textHint, int& textAlign)
 {
   ASSERT(widget);
   ASSERT(style);
+  if (!style)
+    return;
 
   borderHint = gfx::Border(0, 0, 0, 0);
   gfx::Border paddingHint(0, 0, 0, 0);
-  gfx::Size textHint(0, 0);
+
+  textHint = gfx::Rect(0, 0, 0, 0);
+  textAlign = CENTER | MIDDLE;
+
   gfx::Size iconHint(0, 0);
-  int textAlign = CENTER | MIDDLE;
   int iconAlign = CENTER | MIDDLE;
 
   for_each_layer(
@@ -662,11 +703,10 @@ void set_theme(Theme* theme, const int uiscale)
     details::reinitThemeForAllWidgets();
 
     // Reinitialize all widget using the new theme/uiscale
-    Manager* manager = Manager::getDefault();
-    if (manager)
+    if (Manager* manager = Manager::getDefault()) {
       manager->initTheme();
-
-    manager->invalidate();
+      manager->invalidate();
+    }
   }
 
   old_ui_scale = current_ui_scale;
@@ -688,81 +728,18 @@ int details::old_guiscale()
 }
 
 // static
-void Theme::drawSlices(Graphics* g, she::Surface* sheet,
+void Theme::drawSlices(Graphics* g, os::Surface* sheet,
                        const gfx::Rect& rc,
                        const gfx::Rect& sprite,
                        const gfx::Rect& slices,
                        const gfx::Color color,
                        const bool drawCenter)
 {
-  const int w1 = slices.x;
-  const int h1 = slices.y;
-  const int w2 = slices.w;
-  const int h2 = slices.h;
-  const int w3 = sprite.w-w1-w2;
-  const int h3 = sprite.h-h1-h2;
-  const int x2 = rc.x2()-w3;
-  const int y2 = rc.y2()-h3;
-  auto draw = getDrawSurfaceFunction(g, sheet, color);
-
-  // Top
-  int x = rc.x;
-  int y = rc.y;
-  draw(sprite.x, sprite.y,
-       x, y, w1, h1);
-  {
-    IntersectClip clip(g, gfx::Rect(rc.x+w1, rc.y, rc.w-w1-w3, h1));
-    if (clip) {
-      for (x+=w1; x<x2; x+=w2) {
-        draw(sprite.x+w1, sprite.y,
-             x, y, w2, h1);
-      }
-    }
-  }
-  draw(sprite.x+w1+w2, sprite.y,
-       x2, y, w3, h1);
-
-  // Bottom
-  x = rc.x;
-  y = y2;
-  draw(sprite.x, sprite.y+h1+h2,
-       x, y, w1, h3);
-  {
-    IntersectClip clip(g, gfx::Rect(rc.x+w1, y2, rc.w-w1-w3, h3));
-    if (clip) {
-      for (x+=w1; x<x2; x+=w2) {
-        draw(sprite.x+w1, sprite.y+h1+h2,
-             x, y2, w2, h3);
-      }
-    }
-  }
-  draw(sprite.x+w1+w2, sprite.y+h1+h2,
-       x2, y2, w3, h3);
-
-  // Left & Right
-  IntersectClip clip(g, gfx::Rect(rc.x, rc.y+h1, rc.w, rc.h-h1-h3));
-  if (clip) {
-    for (y=rc.y+h1; y<y2; y+=h2) {
-      // Left
-      draw(sprite.x, sprite.y+h1,
-           rc.x, y, w1, h2);
-      // Right
-      draw(sprite.x+w1+w2, sprite.y+h1,
-           x2, y, w3, h2);
-    }
-  }
-
-  // Center
-  if (drawCenter) {
-    IntersectClip clip(g, gfx::Rect(rc.x+w1, rc.y+h1, rc.w-w1-w3, rc.h-h1-h3));
-    if (clip) {
-      for (y=rc.y+h1; y<y2; y+=h2) {
-        for (x=rc.x+w1; x<x2; x+=w2)
-          draw(sprite.x+w1, sprite.y+h1,
-               x, y, w2, h2);
-      }
-    }
-  }
+  Paint paint;
+  paint.color(color);
+  if (!drawCenter)
+    paint.setFlags(Paint::kNineWithoutCenter);
+  g->drawSurfaceNine(sheet, sprite, slices, rc, &paint);
 }
 
 // static
@@ -776,7 +753,7 @@ void Theme::drawTextBox(Graphics* g, Widget* widget,
   int x, y, chr, len;
   gfx::Point scroll;
   int textheight = widget->textHeight();
-  she::Font* font = widget->font();
+  os::Font* font = widget->font();
   char *beg_end, *old_end;
   int width;
   gfx::Rect vp;
@@ -817,7 +794,7 @@ void Theme::drawTextBox(Graphics* g, Widget* widget,
       // Make good use of the complete text-box
       if (view) {
         gfx::Size maxSize = view->getScrollableSize();
-        width = MAX(vp.w, maxSize.w);
+        width = std::max(vp.w, maxSize.w);
       }
       else {
         width = vp.w;
@@ -842,7 +819,7 @@ void Theme::drawTextBox(Graphics* g, Widget* widget,
     }
     // With word-wrap
     else {
-      old_end = NULL;
+      old_end = nullptr;
       for (beg_end=beg;;) {
         end = std::strpbrk(beg_end, " \n");
         if (end) {
@@ -894,7 +871,7 @@ void Theme::drawTextBox(Graphics* g, Widget* widget,
     }
 
     if (w)
-      *w = MAX(*w, len);
+      *w = std::max(*w, len);
 
     y += textheight;
 

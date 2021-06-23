@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2021  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -10,9 +11,8 @@
 
 #include "app/color.h"
 #include "app/context_observer.h"
-#include "app/doc_observer.h"
-#include "app/docs_observer.h"
 #include "app/tools/active_tool_observer.h"
+#include "app/ui/doc_observer_widget.h"
 #include "base/time.h"
 #include "ui/base.h"
 #include "ui/box.h"
@@ -25,6 +25,7 @@ namespace ui {
   class Button;
   class Entry;
   class Label;
+  class TooltipManager;
   class Window;
 }
 
@@ -41,10 +42,7 @@ namespace app {
     class Tool;
   }
 
-  class StatusBar : public ui::HBox
-                  , public ContextObserver
-                  , public DocsObserver
-                  , public DocObserver
+  class StatusBar : public DocObserverWidget<ui::HBox>
                   , public tools::ActiveToolObserver {
     static StatusBar* m_instance;
   public:
@@ -52,13 +50,16 @@ namespace app {
 
     enum BackupIcon { None, Normal, Small };
 
-    StatusBar();
+    StatusBar(ui::TooltipManager* tooltipManager);
     ~StatusBar();
 
     void clearText();
+    void showDefaultText();
+    void showDefaultText(Doc* doc);
+    void showAbout();
 
-    bool setStatusText(int msecs, const char* format, ...);
-    void showTip(int msecs, const char* format, ...);
+    bool setStatusText(int msecs, const std::string& text);
+    void showTip(int msecs, const std::string& msg);
     void showColor(int msecs, const char* text, const Color& color);
     void showTool(int msecs, tools::Tool* tool);
     void showSnapToGridWarning(bool state);
@@ -75,9 +76,6 @@ namespace app {
     // ContextObserver impl
     void onActiveSiteChange(const Site& site) override;
 
-    // DocObservers impl
-    void onRemoveDocument(Doc* doc) override;
-
     // DocObserver impl
     void onPixelFormatChanged(DocEvent& ev) override;
 
@@ -89,8 +87,13 @@ namespace app {
     void newFrame();
     void onChangeZoom(const render::Zoom& zoom);
     void updateSnapToGridWindowPosition();
+    void showIndicators();
 
     base::tick_t m_timeout;
+
+    // About text
+    class AboutStatusBar;
+    AboutStatusBar* m_about;
 
     // Indicators
     class Indicators;
@@ -104,7 +107,6 @@ namespace app {
     ui::Entry* m_currentFrame;        // Current frame and go to frame entry
     ui::Button* m_newFrame;           // Button to create a new frame
     ZoomEntry* m_zoomEntry;
-    Doc* m_doc;                // Document used to show the cel slider
 
     // Tip window
     class CustomizedTipWindow;

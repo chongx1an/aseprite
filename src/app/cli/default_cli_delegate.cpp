@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2016-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -20,15 +21,16 @@
 #include "app/file/palette_file.h"
 #include "app/ui_context.h"
 #include "base/convert_to.h"
-#include "doc/frame_tag.h"
 #include "doc/layer.h"
 #include "doc/palette.h"
 #include "doc/slice.h"
 #include "doc/sprite.h"
+#include "doc/tag.h"
+#include "ver/info.h"
 
 #ifdef ENABLE_SCRIPTING
-  #include "app/script/app_scripting.h"
-  #include "script/engine_delegate.h"
+  #include "app/app.h"
+  #include "app/script/engine.h"
 #endif
 
 #include <iostream>
@@ -39,18 +41,20 @@ namespace app {
 void DefaultCliDelegate::showHelp(const AppOptions& options)
 {
   std::cout
-    << PACKAGE << " v" << VERSION << " | A pixel art program\n" << COPYRIGHT
+    << get_app_name() << " v" << get_app_version()
+    << " | A pixel art program\n"
+    << get_app_copyright()
     << "\n\nUsage:\n"
     << "  " << options.exeName() << " [OPTIONS] [FILES]...\n\n"
     << "Options:\n"
     << options.programOptions()
-    << "\nFind more information in " << PACKAGE
-    << " web site: " << WEBSITE << "\n\n";
+    << "\nFind more information in " << get_app_name()
+    << " web site: " << get_app_url() << "\n\n";
 }
 
 void DefaultCliDelegate::showVersion()
 {
-  std::cout << PACKAGE << ' ' << VERSION << '\n';
+  std::cout << get_app_name() << ' ' << get_app_version() << '\n';
 }
 
 void DefaultCliDelegate::afterOpenFile(const CliOpenFile& cof)
@@ -64,7 +68,7 @@ void DefaultCliDelegate::afterOpenFile(const CliOpenFile& cof)
   }
 
   if (cof.listTags) {
-    for (doc::FrameTag* tag : cof.document->sprite()->frameTags())
+    for (doc::Tag* tag : cof.document->sprite()->tags())
       std::cout << tag->name() << "\n";
   }
 
@@ -81,8 +85,8 @@ void DefaultCliDelegate::saveFile(Context* ctx, const CliOpenFile& cof)
   params.set("filename", cof.filename.c_str());
   params.set("filename-format", cof.filenameFormat.c_str());
 
-  if (cof.hasFrameTag()) {
-    params.set("frame-tag", cof.frameTag.c_str());
+  if (cof.hasTag()) {
+    params.set("frame-tag", cof.tag.c_str());
   }
   if (cof.hasFrameRange()) {
     params.set("from-frame", base::convert_to<std::string>(cof.fromFrame).c_str());
@@ -91,6 +95,9 @@ void DefaultCliDelegate::saveFile(Context* ctx, const CliOpenFile& cof)
   if (cof.hasSlice()) {
     params.set("slice", cof.slice.c_str());
   }
+
+  if (cof.ignoreEmpty)
+    params.set("ignoreEmpty", "true");
 
   ctx->executeCommand(saveAsCommand, params);
 }
@@ -117,20 +124,24 @@ void DefaultCliDelegate::exportFiles(Context* ctx, DocExporter& exporter)
 {
   LOG("APP: Exporting sheet...\n");
 
-  std::unique_ptr<Doc> spriteSheet(exporter.exportSheet(ctx));
+  base::task_token token;
+  std::unique_ptr<Doc> spriteSheet(
+    exporter.exportSheet(ctx, token));
 
   // Sprite sheet isn't used, we just delete it.
 
   LOG("APP: Export sprite sheet: Done\n");
 }
 
-void DefaultCliDelegate::execScript(const std::string& filename)
-{
 #ifdef ENABLE_SCRIPTING
-  script::StdoutEngineDelegate delegate;
-  AppScripting engine(&delegate);
-  engine.evalFile(filename);
-#endif
+int DefaultCliDelegate::execScript(const std::string& filename,
+                                   const Params& params)
+{
+  auto engine = App::instance()->scriptEngine();
+  if (!engine->evalFile(filename, params))
+    throw base::Exception("Error executing script %s", filename.c_str());
+  return engine->returnCode();
 }
+#endif // ENABLE_SCRIPTING
 
 } // namespace app

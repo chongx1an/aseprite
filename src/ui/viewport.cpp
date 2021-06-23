@@ -1,5 +1,6 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013, 2015  David Capello
+// Copyright (C) 2018-2019  Igara Studio S.A.
+// Copyright (C) 2001-2015  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -17,6 +18,8 @@
 #include "ui/view.h"
 #include "ui/viewport.h"
 
+#include <algorithm>
+
 namespace ui {
 
 using namespace gfx;
@@ -24,6 +27,7 @@ using namespace gfx;
 Viewport::Viewport()
   : Widget(kViewViewportWidget)
 {
+  enableFlags(IGNORE_MOUSE);
   initTheme();
 }
 
@@ -41,8 +45,8 @@ void Viewport::onResize(ResizeEvent& ev)
   for (auto child : children()) {
     Size reqSize = child->sizeHint();
 
-    cpos.w = MAX(reqSize.w, rect.w - border().width());
-    cpos.h = MAX(reqSize.h, rect.h - border().height());
+    cpos.w = std::max(reqSize.w, rect.w - border().width());
+    cpos.h = std::max(reqSize.h, rect.h - border().height());
 
     child->setBounds(cpos);
   }
@@ -66,8 +70,8 @@ Size Viewport::calculateNeededSize()
 
   for (auto child : children()) {
     reqSize = child->sizeHint();
-    maxSize.w = MAX(maxSize.w, reqSize.w);
-    maxSize.h = MAX(maxSize.h, reqSize.h);
+    maxSize.w = std::max(maxSize.w, reqSize.w);
+    maxSize.h = std::max(maxSize.h, reqSize.h);
   }
 
   return maxSize;

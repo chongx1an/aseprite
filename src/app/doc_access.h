@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2019-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -12,6 +13,7 @@
 #include "app/doc.h"
 #include "base/exception.h"
 
+#include <atomic>
 #include <exception>
 
 namespace app {
@@ -81,13 +83,13 @@ namespace app {
 
     explicit DocReader(Doc* doc, int timeout)
       : DocAccess(doc) {
-      if (m_doc && !m_doc->lock(Doc::ReadLock, timeout))
+      if (m_doc && !m_doc->readLock(timeout))
         throw CannotReadDocException();
     }
 
     explicit DocReader(const DocReader& copy, int timeout)
       : DocAccess(copy) {
-      if (m_doc && !m_doc->lock(Doc::ReadLock, timeout))
+      if (m_doc && !m_doc->readLock(timeout))
         throw CannotReadDocException();
     }
 
@@ -125,7 +127,7 @@ namespace app {
       , m_from_reader(false)
       , m_locked(false) {
       if (m_doc) {
-        if (!m_doc->lock(Doc::WriteLock, timeout))
+        if (!m_doc->writeLock(timeout))
           throw CannotWriteDocException();
 
         m_locked = true;
@@ -181,13 +183,31 @@ namespace app {
     }
 
     void destroyDocument() {
-      ASSERT(m_doc != NULL);
+      ASSERT(m_doc != nullptr);
+
+      // Don't create a backup for destroyed documents (e.g. documents
+      // are destroyed when they are used internally by Aseprite or by
+      // a script and then closed with Sprite:close())
+      if (m_doc->needsBackup())
+        m_doc->setInhibitBackup(true);
 
       m_doc->close();
       Doc* doc = m_doc;
       unlock();
 
       delete doc;
+      m_doc = nullptr;
+    }
+
+    void closeDocument() {
+      ASSERT(m_doc != nullptr);
+
+      Context* ctx = (Context*)m_doc->context();
+      m_doc->close();
+      Doc* doc = m_doc;
+      unlock();
+
+      ctx->closeDocument(doc);
       m_doc = nullptr;
     }
 
@@ -226,7 +246,7 @@ namespace app {
     WeakDocReader(const WeakDocReader&);
     WeakDocReader& operator=(const WeakDocReader&);
 
-    base::RWLock::WeakLock m_weak_lock;
+    std::atomic<base::RWLock::WeakLock> m_weak_lock;
   };
 
 } // namespace app

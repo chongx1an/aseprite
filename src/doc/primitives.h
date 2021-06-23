@@ -1,4 +1,5 @@
 // Aseprite Document Library
+// Copyright (c) 2018-2021 Igara Studio S.A.
 // Copyright (c) 2001-2016 David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -8,6 +9,7 @@
 #define DOC_PRIMITIVES_H_INCLUDED
 #pragma once
 
+#include "base/ints.h"
 #include "doc/color.h"
 #include "doc/image_buffer.h"
 #include "gfx/fwd.h"
@@ -36,12 +38,19 @@ namespace doc {
   void fill_rect(Image* image, const gfx::Rect& rc, color_t c);
   void blend_rect(Image* image, int x1, int y1, int x2, int y2, color_t c, int opacity);
   void draw_line(Image* image, int x1, int y1, int x2, int y2, color_t c);
-  void draw_ellipse(Image* image, int x1, int y1, int x2, int y2, color_t c);
-  void fill_ellipse(Image* image, int x1, int y1, int x2, int y2, color_t c);
+  void draw_ellipse(Image* image, int x1, int y1, int x2, int y2, int extraXPxs, int extraYPxs, color_t color);
+  void fill_ellipse(Image* image, int x1, int y1, int x2, int y2, int extraXPxs, int extraYPxs, color_t color);
+
+  bool is_plain_image(const Image* img, color_t c);
+  bool is_empty_image(const Image* img);
 
   int count_diff_between_images(const Image* i1, const Image* i2);
+  bool is_same_image(const Image* i1, const Image* i2);
 
   void remap_image(Image* image, const Remap& remap);
+
+  uint32_t calculate_image_hash(const Image* image,
+                                const gfx::Rect& bounds);
 
 } // namespace doc
 

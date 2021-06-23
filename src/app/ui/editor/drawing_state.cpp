@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2021  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -25,6 +26,7 @@
 #include "app/ui/keyboard_shortcuts.h"
 #include "app/ui/skin/skin_theme.h"
 #include "app/ui_context.h"
+#include "base/scoped_value.h"
 #include "doc/layer.h"
 #include "ui/message.h"
 #include "ui/system.h"
@@ -49,6 +51,7 @@ DrawingState::DrawingState(Editor* editor,
   , m_toolLoopManager(new tools::ToolLoopManager(toolLoop))
   , m_mouseMoveReceived(false)
   , m_mousePressedReceived(false)
+  , m_processScrollChange(true)
 {
   m_beforeCmdConn =
     UIContext::instance()->BeforeCommandExecution.connect(
@@ -77,6 +80,8 @@ void DrawingState::initToolLoop(Editor* editor,
 
   ASSERT(!m_toolLoopManager->isCanceled());
 
+  m_velocity.reset();
+  m_lastPointer = pointer;
   m_toolLoopManager->prepareLoop(pointer);
   m_toolLoopManager->pressButton(pointer);
 
@@ -88,6 +93,7 @@ void DrawingState::initToolLoop(Editor* editor,
 void DrawingState::sendMovementToToolLoop(const tools::Pointer& pointer)
 {
   ASSERT(m_toolLoopManager);
+  m_lastPointer = pointer;
   m_toolLoopManager->movement(pointer);
 }
 
@@ -95,6 +101,12 @@ void DrawingState::notifyToolLoopModifiersChange(Editor* editor)
 {
   if (!m_toolLoopManager->isCanceled())
     m_toolLoopManager->notifyToolLoopModifiersChange();
+}
+
+void DrawingState::onBeforePopState(Editor* editor)
+{
+  m_beforeCmdConn.disconnect();
+  StandbyState::onBeforePopState(editor);
 }
 
 bool DrawingState::onMouseDown(Editor* editor, MouseMessage* msg)
@@ -105,7 +117,9 @@ bool DrawingState::onMouseDown(Editor* editor, MouseMessage* msg)
   if (!editor->hasCapture())
     editor->captureMouse();
 
-  tools::Pointer pointer = pointer_from_msg(editor, msg);
+  tools::Pointer pointer = pointer_from_msg(editor, msg,
+                                            m_velocity.velocity());
+  m_lastPointer = pointer;
 
   // Check if this drawing state was started with a Shift+Pencil tool
   // and now the user pressed the right button to draw the straight
@@ -153,11 +167,19 @@ bool DrawingState::onMouseUp(Editor* editor, MouseMessage* msg)
   if (!m_toolLoop->getInk()->isSelection() ||
       m_toolLoop->getController()->isOnePoint() ||
       m_mouseMoveReceived ||
-      editor->getToolLoopModifiers() != tools::ToolLoopModifiers::kReplaceSelection) {
+      // In case of double-click (to select tiles) we don't want to
+      // deselect if the mouse is not moved. In this case the tile
+      // will be selected anyway even if the mouse is not moved.
+      m_type == DrawingType::SelectTiles ||
+      (editor->getToolLoopModifiers() != tools::ToolLoopModifiers::kReplaceSelection &&
+       editor->getToolLoopModifiers() != tools::ToolLoopModifiers::kIntersectSelection)) {
+    m_lastPointer = pointer_from_msg(editor, msg,
+                                     m_velocity.velocity());
+
     // Notify the release of the mouse button to the tool loop
     // manager. This is the correct way to say "the user finishes the
     // drawing trace correctly".
-    if (m_toolLoopManager->releaseButton(pointer_from_msg(editor, msg)))
+    if (m_toolLoopManager->releaseButton(m_lastPointer))
       return true;
   }
 
@@ -182,24 +204,29 @@ bool DrawingState::onMouseUp(Editor* editor, MouseMessage* msg)
 
 bool DrawingState::onMouseMove(Editor* editor, MouseMessage* msg)
 {
-  ASSERT(m_toolLoopManager != NULL);
-
-  m_mouseMoveReceived = true;
-
   // It's needed to avoid some glitches with brush boundaries.
   //
   // TODO we should be able to avoid this if we correctly invalidate
   // the BrushPreview::m_clippingRegion
   HideBrushPreview hide(editor->brushPreview());
 
-  // Infinite scroll
-  gfx::Point mousePos = editor->autoScroll(msg, AutoScroll::MouseDir);
-  tools::Pointer pointer(editor->screenToEditor(mousePos),
-                         button_from_msg(msg));
+  // Don't process onScrollChange() messages if autoScroll() changes
+  // the scroll.
+  base::ScopedValue<bool> disableScroll(m_processScrollChange,
+                                        false, m_processScrollChange);
 
-  // Notify mouse movement to the tool
-  ASSERT(m_toolLoopManager != NULL);
-  m_toolLoopManager->movement(pointer);
+  // Update velocity sensor.
+  m_velocity.updateWithScreenPoint(msg->position());
+
+  // The autoScroll() function controls the "infinite scroll" when we
+  // touch the viewport borders.
+  gfx::Point mousePos = editor->autoScroll(msg, AutoScroll::MouseDir);
+  handleMouseMovement(
+    tools::Pointer(editor->screenToEditor(mousePos),
+                   m_velocity.velocity(),
+                   button_from_msg(msg),
+                   msg->pointerType(),
+                   msg->pressure()));
 
   return true;
 }
@@ -222,9 +249,12 @@ bool DrawingState::onKeyDown(Editor* editor, KeyMessage* msg)
   Params params;
   if (KeyboardShortcuts::instance()
         ->getCommandFromKeyMessage(msg, &command, &params)) {
-    // We accept zoom commands.
-    if (command->id() == CommandId::Zoom()) {
-      UIContext::instance()->executeCommand(command, params);
+    // We accept some commands...
+    if (command->id() == CommandId::Zoom() ||
+        command->id() == CommandId::Undo() ||
+        command->id() == CommandId::Redo() ||
+        command->id() == CommandId::Cancel()) {
+      UIContext::instance()->executeCommandFromMenuOrShortcut(command, params);
       return true;
     }
   }
@@ -251,6 +281,24 @@ bool DrawingState::onKeyUp(Editor* editor, KeyMessage* msg)
   return true;
 }
 
+bool DrawingState::onScrollChange(Editor* editor)
+{
+  if (m_processScrollChange) {
+    gfx::Point mousePos = ui::get_mouse_position();
+
+    // Update velocity sensor.
+    m_velocity.updateWithScreenPoint(mousePos); // TODO add scroll as velocity?
+
+    handleMouseMovement(
+      tools::Pointer(editor->screenToEditor(mousePos),
+                     m_velocity.velocity(),
+                     m_lastPointer.button(),
+                     tools::Pointer::Type::Unknown,
+                     0.0f));
+  }
+  return true;
+}
+
 bool DrawingState::onUpdateStatusBar(Editor* editor)
 {
   // The status bar is updated by ToolLoopImpl::updateStatusBar()
@@ -264,6 +312,16 @@ void DrawingState::onExposeSpritePixels(const gfx::Region& rgn)
     m_toolLoop->validateDstImage(rgn);
 }
 
+void DrawingState::handleMouseMovement(const tools::Pointer& pointer)
+{
+  m_mouseMoveReceived = true;
+  m_lastPointer = pointer;
+
+  // Notify mouse movement to the tool
+  ASSERT(m_toolLoopManager);
+  m_toolLoopManager->movement(pointer);
+}
+
 bool DrawingState::canExecuteCommands()
 {
   // Returning true here means that the user can trigger commands with
@@ -275,9 +333,22 @@ bool DrawingState::canExecuteCommands()
           !m_mousePressedReceived);
 }
 
-void DrawingState::onBeforeCommandExecution(CommandExecutionEvent& cmd)
+void DrawingState::onBeforeCommandExecution(CommandExecutionEvent& ev)
 {
-  if (canExecuteCommands() && m_toolLoop) {
+  if (!m_toolLoop)
+    return;
+
+  if (canExecuteCommands() ||
+      // Undo/Redo/Cancel will cancel the ToolLoop
+      ev.command()->id() == CommandId::Undo() ||
+      ev.command()->id() == CommandId::Redo() ||
+      ev.command()->id() == CommandId::Cancel()) {
+    if (!canExecuteCommands()) {
+      // Cancel the execution of Undo/Redo/Cancel because we've
+      // simulated it here
+      ev.cancel();
+    }
+
     m_toolLoop->cancel();
     destroyLoopIfCanceled(m_editor);
   }

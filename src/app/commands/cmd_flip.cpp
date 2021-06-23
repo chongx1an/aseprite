@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2019-2021  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -24,7 +25,7 @@
 #include "app/modules/editors.h"
 #include "app/modules/gui.h"
 #include "app/tools/tool_box.h"
-#include "app/transaction.h"
+#include "app/tx.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/editor/moving_pixels_state.h"
 #include "app/ui/status_bar.h"
@@ -62,43 +63,51 @@ void FlipCommand::onLoadParams(const Params& params)
                                             doc::algorithm::FlipHorizontal);
 }
 
-bool FlipCommand::onEnabled(Context* context)
+bool FlipCommand::onEnabled(Context* ctx)
 {
-  return context->checkFlags(ContextFlags::ActiveDocumentIsWritable);
+  return ctx->checkFlags(ContextFlags::ActiveDocumentIsWritable);
 }
 
-void FlipCommand::onExecute(Context* context)
+void FlipCommand::onExecute(Context* ctx)
 {
-  Site site = context->activeSite();
-  Timeline* timeline = App::instance()->timeline();
-  LockTimelineRange lockRange(timeline);
+  Site site = ctx->activeSite();
+  LockTimelineRange lockRange(App::instance()->timeline());
 
   CelList cels;
   if (m_flipMask) {
-    auto range = timeline->range();
+#ifdef ENABLE_UI
+    // If we want to flip the visible mask we can go to
+    // MovingPixelsState (even when the range is enabled, because now
+    // PixelsMovement support ranges).
+    if (site.document()->isMaskVisible() &&
+        ctx->isUIAvailable()) {
+      // Select marquee tool
+      if (tools::Tool* tool = App::instance()->toolBox()
+          ->getToolById(tools::WellKnownTools::RectangularMarquee)) {
+        ToolBar::instance()->selectTool(tool);
+        current_editor->startFlipTransformation(m_flipType);
+        return;
+      }
+    }
+#endif
+
+    auto range = site.range();
     if (range.enabled()) {
-      cels = get_unlocked_unique_cels(site.sprite(), range);
+      cels = get_unique_cels_to_edit_pixels(site.sprite(), range);
     }
     else if (site.cel() &&
-              site.layer() &&
-              site.layer()->isEditable()) {
-      // If we want to flip the visible mask for the current cel,
-      // we can go to MovingPixelsState.
-      if (site.document()->isMaskVisible()) {
-        // Select marquee tool
-        if (tools::Tool* tool = App::instance()->toolBox()
-            ->getToolById(tools::WellKnownTools::RectangularMarquee)) {
-          ToolBar::instance()->selectTool(tool);
-          current_editor->startFlipTransformation(m_flipType);
-          return;
-        }
-      }
+             site.layer() &&
+             site.layer()->canEditPixels()) {
       cels.push_back(site.cel());
     }
 
     if (cels.empty()) {
-      StatusBar::instance()->showTip(
-        1000, Strings::statusbar_tips_all_layers_are_locked().c_str());
+#ifdef ENABLE_UI
+      if (ctx->isUIAvailable()) {
+        StatusBar::instance()->showTip(
+          1000, Strings::statusbar_tips_all_layers_are_locked());
+      }
+#endif // ENABLE_UI
       return;
     }
   }
@@ -108,11 +117,11 @@ void FlipCommand::onExecute(Context* context)
       cels.push_back(cel);
   }
 
-  ContextWriter writer(context);
+  ContextWriter writer(ctx);
   Doc* document = writer.document();
   Sprite* sprite = writer.sprite();
-  Transaction transaction(writer.context(), friendlyName());
-  DocApi api = document->getApi(transaction);
+  Tx tx(ctx, friendlyName());
+  DocApi api = document->getApi(tx);
 
   Mask* mask = document->mask();
   if (m_flipMask && document->isMaskVisible()) {
@@ -141,12 +150,12 @@ void FlipCommand::onExecute(Context* context)
           continue;
 
         if (mask->bitmap() && !mask->isRectangular())
-          transaction.execute(new cmd::FlipMaskedCel(cel, m_flipType));
+          tx(new cmd::FlipMaskedCel(cel, m_flipType));
         else
           api.flipImage(image, flipBounds, m_flipType);
 
         if (cel->layer()->isTransparent())
-          transaction.execute(new cmd::TrimCel(cel));
+          tx(new cmd::TrimCel(cel));
       }
       // When the mask is bigger than the cel bounds, we have to
       // expand the cel, make the flip, and shrink it again.
@@ -157,7 +166,7 @@ void FlipCommand::onExecute(Context* context)
 
         ExpandCelCanvas expand(
           site, cel->layer(),
-          TiledMode::NONE, transaction,
+          TiledMode::NONE, tx,
           ExpandCelCanvas::None);
 
         expand.validateDestCanvas(gfx::Region(flipBounds));
@@ -188,7 +197,7 @@ void FlipCommand::onExecute(Context* context)
         if (m_flipType == doc::algorithm::FlipVertical)
           bounds.y = sprite->height() - bounds.h - bounds.y;
 
-        transaction.execute(new cmd::SetCelBoundsF(cel, bounds));
+        tx(new cmd::SetCelBoundsF(cel, bounds));
       }
       else {
         api.setCelPosition
@@ -208,11 +217,11 @@ void FlipCommand::onExecute(Context* context)
   // Flip the mask.
   Image* maskBitmap = mask->bitmap();
   if (maskBitmap) {
-    transaction.execute(new cmd::FlipMask(document, m_flipType));
+    tx(new cmd::FlipMask(document, m_flipType));
 
     // Flip the mask position because the
     if (!m_flipMask)
-      transaction.execute(
+      tx(
         new cmd::SetMaskPosition(
           document,
           gfx::Point(
@@ -222,12 +231,14 @@ void FlipCommand::onExecute(Context* context)
             (m_flipType == doc::algorithm::FlipVertical ?
               sprite->height() - mask->bounds().y2():
               mask->bounds().y))));
-
-    document->generateMaskBoundaries();
   }
 
-  transaction.commit();
-  update_screen_for_document(document);
+  tx.commit();
+
+#ifdef ENABLE_UI
+  if (ctx->isUIAvailable())
+    update_screen_for_document(document);
+#endif
 }
 
 std::string FlipCommand::onGetFriendlyName() const
@@ -241,9 +252,9 @@ std::string FlipCommand::onGetFriendlyName() const
     content = Strings::commands_Flip_Canvas();
 
   if (m_flipType == doc::algorithm::FlipHorizontal)
-    content = Strings::commands_Flip_Horizontally();
+    orientation = Strings::commands_Flip_Horizontally();
   else
-    content = Strings::commands_Flip_Vertically();
+    orientation = Strings::commands_Flip_Vertically();
 
   return fmt::format(getBaseFriendlyName(), content, orientation);
 }

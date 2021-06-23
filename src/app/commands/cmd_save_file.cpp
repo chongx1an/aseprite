@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2019-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -32,13 +33,12 @@
 #include "app/ui/layer_frame_comboboxes.h"
 #include "app/ui/optional_alert.h"
 #include "app/ui/status_bar.h"
-#include "base/bind.h"
 #include "base/convert_to.h"
 #include "base/fs.h"
 #include "base/scoped_value.h"
 #include "base/thread.h"
-#include "doc/frame_tag.h"
 #include "doc/sprite.h"
+#include "doc/tag.h"
 #include "fmt/format.h"
 #include "ui/ui.h"
 #include "undo/undo_state.h"
@@ -88,13 +88,15 @@ private:
 SaveFileBaseCommand::SaveFileBaseCommand(const char* id, CommandFlags flags)
   : Command(id, flags)
 {
+  m_useUI = true;
+  m_ignoreEmpty = false;
 }
 
 void SaveFileBaseCommand::onLoadParams(const Params& params)
 {
   m_filename = params.get("filename");
   m_filenameFormat = params.get("filename-format");
-  m_frameTag = params.get("frame-tag");
+  m_tag = params.get("frame-tag");
   m_aniDir = params.get("ani-dir");
   m_slice = params.get("slice");
 
@@ -103,12 +105,17 @@ void SaveFileBaseCommand::onLoadParams(const Params& params)
     doc::frame_t fromFrame = params.get_as<doc::frame_t>("from-frame");
     doc::frame_t toFrame = params.get_as<doc::frame_t>("to-frame");
     m_selFrames.insert(fromFrame, toFrame);
-    m_adjustFramesByFrameTag = true;
+    m_adjustFramesByTag = true;
   }
   else {
     m_selFrames.clear();
-    m_adjustFramesByFrameTag = false;
+    m_adjustFramesByTag = false;
   }
+
+  std::string useUI = params.get("useUI");
+  m_useUI = (useUI.empty() || (useUI == "true"));
+
+  m_ignoreEmpty = params.get_as<bool>("ignoreEmpty");
 }
 
 // Returns true if there is a current sprite to save.
@@ -127,6 +134,13 @@ std::string SaveFileBaseCommand::saveAsDialog(
   const std::string& forbiddenFilename)
 {
   Doc* document = context->activeDocument();
+
+  // Before we change the document filename to the copy, we save its
+  // preferences so in a future export operation the values persist,
+  // and we can re-export the original document with the same
+  // preferences.
+  Preferences::instance().save();
+
   std::string filename;
 
   if (!m_filename.empty()) {
@@ -139,7 +153,8 @@ std::string SaveFileBaseCommand::saveAsDialog(
 #ifdef ENABLE_UI
   again:;
     base::paths newfilename;
-    if (!app::show_file_selector(
+    if (!m_useUI ||
+        !app::show_file_selector(
           dlgTitle, filename, exts,
           FileSelectorType::Save,
           newfilename))
@@ -159,6 +174,21 @@ std::string SaveFileBaseCommand::saveAsDialog(
     saveDocumentInBackground(
       context, document,
       filename, markAsSaved);
+
+    // Reset the "saveCopy" document preferences of the new document
+    // (here "document" contains the new filename), because these
+    // preferences make sense only for the original document that was
+    // exported/copied, not for the new one.
+    //
+    // The new document (the copy) must have the default preferences
+    // just in case the user want to export it to other file (so a
+    // proper default export filename is calculated). This scenario is
+    // described here:
+    //
+    //   https://github.com/aseprite/aseprite/issues/1964
+    //
+    auto& docPref = Preferences::instance().document(document);
+    docPref.saveCopy.clearSection();
   }
 
   return filename;
@@ -181,15 +211,16 @@ void SaveFileBaseCommand::saveDocumentInBackground(
     }
   }
 
-  FileOpROI roi(document, m_slice, m_frameTag,
-                m_selFrames, m_adjustFramesByFrameTag);
+  FileOpROI roi(document, m_slice, m_tag,
+                m_selFrames, m_adjustFramesByTag);
 
   std::unique_ptr<FileOp> fop(
     FileOp::createSaveDocumentOperation(
       context,
       roi,
       filename,
-      m_filenameFormat));
+      m_filenameFormat,
+      m_ignoreEmpty));
   if (!fop)
     return;
 
@@ -216,9 +247,9 @@ void SaveFileBaseCommand::saveDocumentInBackground(
       document->incrementVersion();
     }
 #ifdef ENABLE_UI
-    StatusBar::instance()
-      ->setStatusText(2000, "File <%s> saved.",
-        base::get_file_name(filename).c_str());
+    StatusBar::instance()->setStatusText(
+      2000, fmt::format("File <{}> saved.",
+                        base::get_file_name(filename)));
 #endif
   }
 }
@@ -228,7 +259,6 @@ void SaveFileBaseCommand::saveDocumentInBackground(
 class SaveFileCommand : public SaveFileBaseCommand {
 public:
   SaveFileCommand();
-  Command* clone() const override { return new SaveFileCommand(*this); }
 
 protected:
   void onExecute(Context* context) override;
@@ -267,7 +297,6 @@ void SaveFileCommand::onExecute(Context* context)
 class SaveFileAsCommand : public SaveFileBaseCommand {
 public:
   SaveFileAsCommand();
-  Command* clone() const override { return new SaveFileAsCommand(*this); }
 
 protected:
   void onExecute(Context* context) override;
@@ -288,7 +317,6 @@ void SaveFileAsCommand::onExecute(Context* context)
 class SaveFileCopyAsCommand : public SaveFileBaseCommand {
 public:
   SaveFileCopyAsCommand();
-  Command* clone() const override { return new SaveFileCopyAsCommand(*this); }
 
 protected:
   void onExecute(Context* context) override;
@@ -316,7 +344,7 @@ void SaveFileCopyAsCommand::onExecute(Context* context)
   bool isForTwitter = false;
 
 #if ENABLE_UI
-  if (context->isUIAvailable()) {
+  if (m_useUI && context->isUIAvailable()) {
     ExportFileWindow win(doc);
     bool askOverwrite = true;
 
@@ -334,8 +362,12 @@ void SaveFileCopyAsCommand::onExecute(Context* context)
         return result;
       });
 
+    win.remapWindow();
+    load_window_pos(&win, "ExportFile");
   again:;
-    if (!win.show())
+    const bool result = win.show();
+    save_window_pos(&win, "ExportFile");
+    if (!result)
       return;
 
     outputFilename = win.outputFilenameValue();
@@ -411,12 +443,12 @@ void SaveFileCopyAsCommand::onExecute(Context* context)
 
       // Selected frames to export
       SelectedFrames selFrames;
-      FrameTag* frameTag = calculate_selected_frames(
+      Tag* tag = calculate_selected_frames(
         site, frames, selFrames);
-      if (frameTag)
-        m_frameTag = frameTag->name();
+      if (tag)
+        m_tag = tag->name();
       m_selFrames = selFrames;
-      m_adjustFramesByFrameTag = false;
+      m_adjustFramesByTag = false;
     }
 
     base::ScopedValue<std::string> restoreAniDir(

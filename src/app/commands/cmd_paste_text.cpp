@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2019-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -18,12 +19,14 @@
 #include "app/ui/drop_down_button.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/font_popup.h"
+#include "app/ui/timeline/timeline.h"
 #include "app/util/freetype_utils.h"
-#include "base/bind.h"
+#include "base/clamp.h"
 #include "base/fs.h"
 #include "base/string.h"
 #include "doc/image.h"
 #include "doc/image_ref.h"
+#include "render/dithering.h"
 #include "render/ordered_dither.h"
 #include "render/quantization.h"
 #include "ui/system.h"
@@ -37,7 +40,6 @@ static std::string last_text_used;
 class PasteTextCommand : public Command {
 public:
   PasteTextCommand();
-  Command* clone() const override { return new PasteTextCommand(*this); }
 
 protected:
   bool onEnabled(Context* ctx) override;
@@ -66,8 +68,8 @@ public:
       updateFontFaceButton();
 
     fontSize()->setTextf("%d", size);
-    fontFace()->Click.connect(base::Bind<void>(&PasteTextWindow::onSelectFontFile, this));
-    fontFace()->DropDownClick.connect(base::Bind<void>(&PasteTextWindow::onSelectSystemFont, this));
+    fontFace()->Click.connect([this]{ onSelectFontFile(); });
+    fontFace()->DropDownClick.connect([this]{ onSelectSystemFont(); });
     fontColor()->setColor(color);
     this->antialias()->setSelected(antialias);
   }
@@ -78,7 +80,7 @@ public:
 
   int sizeValue() const {
     int size = fontSize()->textInt();
-    size = MID(1, size, 5000);
+    size = base::clamp(size, 1, 5000);
     return size;
   }
 
@@ -113,7 +115,7 @@ private:
       try {
         m_fontPopup.reset(new FontPopup());
         m_fontPopup->Load.connect(&PasteTextWindow::setFontFace, this);
-        m_fontPopup->Close.connect(base::Bind<void>(&PasteTextWindow::onCloseFontPopup, this));
+        m_fontPopup->Close.connect([this]{ onCloseFontPopup(); });
       }
       catch (const std::exception& ex) {
         Console::showException(ex);
@@ -163,7 +165,7 @@ void PasteTextCommand::onExecute(Context* ctx)
   bool antialias = window.antialias()->isSelected();
   std::string faceName = window.faceValue();
   int size = window.sizeValue();
-  size = MID(1, size, 999);
+  size = base::clamp(size, 1, 999);
   pref.textTool.fontFace(faceName);
   pref.textTool.fontSize(size);
   pref.textTool.antialias(antialias);
@@ -184,11 +186,17 @@ void PasteTextCommand::onExecute(Context* ctx)
         image.reset(
           render::convert_pixel_format(
             image.get(), NULL, sprite->pixelFormat(),
-            render::DitheringAlgorithm::None,
-            render::DitheringMatrix(),
+            render::Dithering(),
             rgbmap, sprite->palette(editor->frame()),
-            false, 0));
+            false,
+            sprite->transparentColor()));
       }
+
+      // TODO we don't support pasting text in multiple cels at the
+      //      moment, so we clear the range here (same as in
+      //      clipboard::paste())
+      if (auto timeline = App::instance()->timeline())
+        timeline->clearAndInvalidateRange();
 
       editor->pasteImage(image.get());
     }

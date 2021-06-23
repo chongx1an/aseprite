@@ -10,10 +10,10 @@
 
 #include "app/commands/params.h"
 #include "app/ui/key.h"
-#include "she/shortcut.h"
+#include "os/shortcut.h"
 #include "ui/menu.h"
 
-namespace she {
+namespace os {
   class MenuItem;
 }
 
@@ -28,8 +28,8 @@ namespace app {
   class AppMenuItem : public ui::MenuItem {
   public:
     struct Native {
-      she::MenuItem* menuItem = nullptr;
-      she::Shortcut shortcut;
+      os::MenuItem* menuItem = nullptr;
+      os::Shortcut shortcut;
       app::KeyContext keyContext = app::KeyContext::Any;
     };
 
@@ -41,11 +41,15 @@ namespace app {
     KeyPtr key() { return m_key; }
     void setKey(const KeyPtr& key);
 
+    void setIsRecentFileItem(bool state) { m_isRecentFileItem = state; }
+    bool isRecentFileItem() const { return m_isRecentFileItem; }
+
     Command* getCommand() { return m_command; }
     const Params& getParams() const { return m_params; }
 
     Native* native() { return m_native; }
     void setNative(const Native& native);
+    void disposeNative();
     void syncNativeMenuItemKeyShortcut();
 
     static void setContextParams(const Params& params);
@@ -60,6 +64,7 @@ namespace app {
     KeyPtr m_key;
     Command* m_command;
     Params m_params;
+    bool m_isRecentFileItem;
     Native* m_native;
 
     static Params s_contextParams;

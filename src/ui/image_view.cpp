@@ -1,4 +1,5 @@
 // Aseprite UI Library
+// Copyright (C) 2020  Igara Studio S.A.
 // Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -10,7 +11,7 @@
 
 #include "ui/image_view.h"
 
-#include "she/surface.h"
+#include "os/surface.h"
 #include "ui/graphics.h"
 #include "ui/message.h"
 #include "ui/paint_event.h"
@@ -20,7 +21,7 @@
 
 namespace ui {
 
-ImageView::ImageView(she::Surface* sur, int align, bool dispose)
+ImageView::ImageView(os::Surface* sur, int align, bool dispose)
  : Widget(kImageViewWidget)
  , m_sur(sur)
  , m_disposeSurface(dispose)
@@ -37,7 +38,7 @@ ImageView::~ImageView()
 void ImageView::onSizeHint(SizeHintEvent& ev)
 {
   gfx::Rect box;
-  getTextIconInfo(&box, NULL, NULL,
+  getTextIconInfo(&box, nullptr, nullptr,
     align(), m_sur->width(), m_sur->height());
 
   ev.setSizeHint(

@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -35,7 +36,6 @@ public:
   enum Type { Undo, Redo };
 
   UndoCommand(Type type);
-  Command* clone() const override { return new UndoCommand(*this); }
 
 protected:
   bool onEnabled(Context* context) override;
@@ -54,12 +54,12 @@ UndoCommand::UndoCommand(Type type)
 
 bool UndoCommand::onEnabled(Context* context)
 {
-  ContextWriter writer(context);
-  Doc* document(writer.document());
+  const ContextReader reader(context);
+  const Doc* doc(reader.document());
   return
-    document != NULL &&
-    ((m_type == Undo ? document->undoHistory()->canUndo():
-                       document->undoHistory()->canRedo()));
+    doc &&
+    ((m_type == Undo ? doc->undoHistory()->canUndo():
+                       doc->undoHistory()->canRedo()));
 }
 
 void UndoCommand::onExecute(Context* context)
@@ -71,7 +71,9 @@ void UndoCommand::onExecute(Context* context)
 #ifdef ENABLE_UI
   Sprite* sprite = document->sprite();
   SpritePosition spritePosition;
-  const bool gotoModified = Preferences::instance().undo.gotoModified();
+  const bool gotoModified =
+    (Preferences::instance().undo.gotoModified() &&
+     context->isUIAvailable() && current_editor);
   if (gotoModified) {
     SpritePosition currentPosition(writer.site()->layer(),
                                    writer.site()->frame());
@@ -108,11 +110,15 @@ void UndoCommand::onExecute(Context* context)
 
   StatusBar* statusbar = StatusBar::instance();
   if (statusbar) {
-    statusbar->showTip(1000, "%s %s",
-      (m_type == Undo ? "Undid": "Redid"),
-      (m_type == Undo ?
-        undo->nextUndoLabel().c_str():
-        undo->nextRedoLabel().c_str()));
+    std::string msg;
+    if (m_type == Undo)
+      msg = "Undid " + undo->nextUndoLabel();
+    else
+      msg = "Redid " + undo->nextRedoLabel();
+    if (Preferences::instance().undo.showTooltip())
+      statusbar->showTip(1000, msg);
+    else
+      statusbar->setStatusText(0, msg);
   }
 #endif // ENABLE_UI
 
@@ -127,9 +133,10 @@ void UndoCommand::onExecute(Context* context)
   // (because new frames/layers could be added, positions that we
   // weren't able to reach before the undo).
   if (gotoModified) {
+    Site newSite = context->activeSite();
     SpritePosition currentPosition(
-      writer.site()->layer(),
-      writer.site()->frame());
+      newSite.layer(),
+      newSite.frame());
 
     if (spritePosition != currentPosition) {
       Layer* selectLayer = spritePosition.layer();

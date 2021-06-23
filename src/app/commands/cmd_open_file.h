@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2020-2021  Igara Studio S.A.
 // Copyright (C) 2016-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -9,6 +10,7 @@
 #pragma once
 
 #include "app/commands/command.h"
+#include "app/pref/preferences.h"
 #include "base/paths.h"
 
 #include <string>
@@ -17,15 +19,14 @@ namespace app {
 
   class OpenFileCommand : public Command {
   public:
-    enum class SequenceDecision {
-      Ask, Agree, Skip,
-    };
-
     OpenFileCommand();
-    Command* clone() const override { return new OpenFileCommand(*this); }
 
     const base::paths& usedFiles() const {
       return m_usedFiles;
+    }
+
+    gen::SequenceDecision seqDecision() const {
+      return m_seqDecision;
     }
 
   protected:
@@ -38,7 +39,7 @@ namespace app {
     bool m_repeatCheckbox;
     bool m_oneFrame;
     base::paths m_usedFiles;
-    SequenceDecision m_seqDecision;
+    gen::SequenceDecision m_seqDecision;
   };
 
 } // namespace app

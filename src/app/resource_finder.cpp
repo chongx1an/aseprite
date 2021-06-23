@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2019-2021  Igara Studio S.A.
 // Copyright (C) 2001-2016  David Capello
 //
 // This program is distributed under the terms of
@@ -13,6 +14,7 @@
 #include "app/app.h"
 #include "base/fs.h"
 #include "base/string.h"
+#include "ver/info.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -26,8 +28,8 @@ namespace app {
 
 ResourceFinder::ResourceFinder(bool log)
   : m_log(log)
+  , m_current(-1)
 {
-  m_current = -1;
 }
 
 const std::string& ResourceFinder::filename() const
@@ -103,8 +105,8 @@ void ResourceFinder::includeDataDir(const char* filename)
 #else
 
   // $HOME/.config/aseprite/filename
-  sprintf(buf, ".config/aseprite/data/%s", filename);
-  includeHomeDir(buf);
+  sprintf(buf, "aseprite/data/%s", filename);
+  includeHomeConfigDir(buf);
 
   // $BINDIR/data/filename
   sprintf(buf, "data/%s", filename);
@@ -148,11 +150,33 @@ void ResourceFinder::includeHomeDir(const char* filename)
 #endif
 }
 
+#if !defined(_WIN32) && !defined(__APPLE__)
+
+// For Linux: It's $XDG_CONFIG_HOME or $HOME/.config
+void ResourceFinder::includeHomeConfigDir(const char* filename)
+{
+  char* configHome = std::getenv("XDG_CONFIG_HOME");
+  if (configHome && *configHome) {
+    // $XDG_CONFIG_HOME/filename
+    addPath(base::join_path(configHome, filename));
+  }
+  else {
+    // $HOME/.config/filename
+    includeHomeDir(base::join_path(std::string(".config"), filename).c_str());
+  }
+}
+
+#endif // !defined(_WIN32) && !defined(__APPLE__)
+
 void ResourceFinder::includeUserDir(const char* filename)
 {
 #ifdef _WIN32
 
-  if (App::instance()->isPortable()) {
+  // $ASEPRITE_USER_FOLDER/filename
+  if (const wchar_t* env = _wgetenv(L"ASEPRITE_USER_FOLDER")) {
+    addPath(base::join_path(base::to_utf8(env), filename));
+  }
+  else if (App::instance()->isPortable()) {
     // $BINDIR/filename
     includeBinDir(filename);
   }
@@ -161,20 +185,30 @@ void ResourceFinder::includeUserDir(const char* filename)
     includeHomeDir(filename);
   }
 
-#elif __APPLE__
+#else  // Unix-like
 
-  // $HOME/Library/Application Support/Aseprite/filename
-  addPath(
-    base::join_path(
-      base::join_path(base::get_lib_app_support_path(), PACKAGE),
-      filename).c_str());
+  // $ASEPRITE_USER_FOLDER/filename
+  if (const char* env = std::getenv("ASEPRITE_USER_FOLDER")) {
+    addPath(base::join_path(env, filename));
+  }
+  else {
+  #ifdef __APPLE__
 
-#else
+    // $HOME/Library/Application Support/Aseprite/filename
+    addPath(
+      base::join_path(
+        base::join_path(base::get_lib_app_support_path(), get_app_name()),
+        filename).c_str());
 
-  // $HOME/.config/aseprite/filename
-  includeHomeDir((std::string(".config/aseprite/") + filename).c_str());
+  #else  // !__APPLE__
 
-#endif
+    // $HOME/.config/aseprite/filename
+    includeHomeConfigDir((std::string("aseprite/") + filename).c_str());
+
+  #endif
+  }
+
+#endif  // end Unix-like
 }
 
 void ResourceFinder::includeDesktopDir(const char* filename)

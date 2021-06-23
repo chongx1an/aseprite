@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
@@ -17,7 +18,6 @@
 #include "app/ui/keyboard_shortcuts.h"
 #include "app/ui/skin/skin_theme.h"
 #include "app/ui_context.h"
-#include "base/bind.h"
 #include "ui/tooltips.h"
 
 #include <algorithm>
@@ -39,7 +39,7 @@ enum AniAction {
   ACTIONS
 };
 
-AniControls::AniControls()
+AniControls::AniControls(TooltipManager* tooltipManager)
   : ButtonSet(5)
 {
   SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
@@ -49,15 +49,13 @@ AniControls::AniControls()
   addItem(theme->parts.aniPlay());
   addItem(theme->parts.aniNext());
   addItem(theme->parts.aniLast());
-  ItemChange.connect(base::Bind(&AniControls::onClickButton, this));
+  ItemChange.connect([this]{ onClickButton(); });
 
   setTriggerOnMouseUp(true);
   setTransparent(true);
 
-  TooltipManager* tooltips = new TooltipManager;
-  addChild(tooltips);
   for (int i=0; i<ACTIONS; ++i)
-    tooltips->addTooltipFor(getItem(i), getTooltipFor(i), BOTTOM);
+    tooltipManager->addTooltipFor(getItem(i), getTooltipFor(i), BOTTOM);
 
   getItem(ACTION_PLAY)->enableFlags(CTRL_RIGHT_CLICK);
 
@@ -84,7 +82,7 @@ void AniControls::onClickButton()
 
   Command* cmd = Commands::instance()->byId(getCommandId(item));
   if (cmd) {
-    UIContext::instance()->executeCommand(cmd);
+    UIContext::instance()->executeCommandFromMenuOrShortcut(cmd);
     updateUsingEditor(current_editor);
   }
 }
@@ -121,9 +119,17 @@ std::string AniControls::getTooltipFor(int index) const
     tooltip = cmd->friendlyName();
 
     KeyPtr key = KeyboardShortcuts::instance()->command(cmd->id().c_str());
+    if (!key || key->accels().empty())
+      key = KeyboardShortcuts::instance()->command(cmd->id().c_str(),
+                                                   Params(),
+                                                   KeyContext::Normal);
     if (key && !key->accels().empty()) {
       tooltip += "\n\nShortcut: ";
       tooltip += key->accels().front().toString();
+    }
+
+    if (index == ACTION_PLAY) {
+      tooltip += "\n\nRight-click: Show playback options";
     }
   }
 

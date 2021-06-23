@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2018-2019  Igara Studio S.A.
 // Copyright (C) 2015-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -15,9 +16,8 @@
 #include "app/i18n/strings.h"
 #include "app/modules/editors.h"
 #include "app/modules/gui.h"
-#include "app/pref/preferences.h"
 #include "app/snap_to_grid.h"
-#include "app/transaction.h"
+#include "app/tx.h"
 #include "app/ui/editor/editor.h"
 #include "doc/mask.h"
 #include "fmt/format.h"
@@ -30,7 +30,6 @@ using namespace doc;
 class SelectTileCommand : public Command {
 public:
   SelectTileCommand();
-  Command* clone() const override { return new SelectTileCommand(*this); }
 
 protected:
   void onLoadParams(const Params& params) override;
@@ -55,6 +54,8 @@ void SelectTileCommand::onLoadParams(const Params& params)
     m_mode = gen::SelectionMode::ADD;
   else if (mode == "subtract")
     m_mode = gen::SelectionMode::SUBTRACT;
+  else if (mode == "intersect")
+    m_mode = gen::SelectionMode::INTERSECT;
   else
     m_mode = gen::SelectionMode::DEFAULT;
 }
@@ -73,7 +74,6 @@ void SelectTileCommand::onExecute(Context* ctx)
   // Lock sprite
   ContextWriter writer(ctx);
   Doc* doc(writer.document());
-  auto& docPref = Preferences::instance().document(doc);
 
   std::unique_ptr<Mask> mask(new Mask());
 
@@ -81,25 +81,32 @@ void SelectTileCommand::onExecute(Context* ctx)
     mask->copyFrom(doc->mask());
 
   {
-    gfx::Rect gridBounds = docPref.grid.bounds();
+    gfx::Rect gridBounds = doc->sprite()->gridBounds();
     gfx::Point pos = current_editor->screenToEditor(ui::get_mouse_position());
     pos = snap_to_grid(gridBounds, pos, PreferSnapTo::BoxOrigin);
     gridBounds.setOrigin(pos);
 
-    if (m_mode != gen::SelectionMode::SUBTRACT)
-      mask->add(gridBounds);
-    else
-      mask->subtract(gridBounds);
+    switch (m_mode) {
+      case gen::SelectionMode::DEFAULT:
+      case gen::SelectionMode::ADD:
+        mask->add(gridBounds);
+        break;
+      case gen::SelectionMode::SUBTRACT:
+        mask->subtract(gridBounds);
+        break;
+      case gen::SelectionMode::INTERSECT:
+        mask->intersect(gridBounds);
+        break;
+    }
   }
 
   // Set the new mask
-  Transaction transaction(writer.context(),
-                          friendlyName(),
-                          DoesntModifyDocument);
-  transaction.execute(new cmd::SetMask(doc, mask.get()));
-  transaction.commit();
+  Tx tx(writer.context(),
+        friendlyName(),
+        DoesntModifyDocument);
+  tx(new cmd::SetMask(doc, mask.get()));
+  tx.commit();
 
-  doc->generateMaskBoundaries();
   update_screen_for_document(doc);
 }
 
@@ -113,8 +120,11 @@ std::string SelectTileCommand::onGetFriendlyName() const
     case gen::SelectionMode::SUBTRACT:
       text = Strings::commands_SelectTile_Subtract();
       break;
+    case gen::SelectionMode::INTERSECT:
+      text = Strings::commands_SelectTile_Intersect();
+      break;
     default:
-      text = getBaseFriendlyName();;
+      text = getBaseFriendlyName();
       break;
   }
   return text;

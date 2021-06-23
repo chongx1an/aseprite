@@ -1,4 +1,5 @@
 // Aseprite
+// Copyright (C) 2020  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
@@ -18,6 +19,7 @@
 #include "app/ui/timeline/timeline.h"
 #include "doc/layer.h"
 #include "doc/sprite.h"
+#include "fmt/format.h"
 
 namespace app {
 
@@ -73,9 +75,9 @@ protected:
   void updateStatusBar(Site& site) {
     if (site.layer() != NULL)
       StatusBar::instance()->setStatusText(
-        1000, "%s '%s' selected",
-        (site.layer()->isGroup() ? "Group": "Layer"),
-        site.layer()->name().c_str());
+        1000, fmt::format("{} '{}' selected",
+                          (site.layer()->isGroup() ? "Group": "Layer"),
+                          site.layer()->name()));
   }
 
 private:
@@ -88,9 +90,6 @@ public:
     : GotoLayerCommand(-1, "GotoPreviousLayer",
                        CmdUIOnlyFlag) {
   }
-  Command* clone() const override {
-    return new GotoPreviousLayerCommand(*this);
-  }
 };
 
 class GotoNextLayerCommand : public GotoLayerCommand {
@@ -98,9 +97,6 @@ public:
   GotoNextLayerCommand()
     : GotoLayerCommand(+1, "GotoNextLayer",
                        CmdUIOnlyFlag) {
-  }
-  Command* clone() const override {
-    return new GotoNextLayerCommand(*this);
   }
 };
 
